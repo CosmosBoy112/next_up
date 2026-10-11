@@ -1,51 +1,182 @@
-"""Coordinator view: metrics, approval queue (the hero), agent requests, shift board, activity."""
+"""Coordinator view: Calendar page and per-shift task pages, a Notion-style sidebar,
+a side peek for quick looks, and a floating assistant chat."""
 
 from __future__ import annotations
 
+import re
+from collections import defaultdict
 
 import streamlit as st
 
 from agent.harness import get_run_approvals, get_run_log, run_agent
 from core import actions, repo
+from ui import floating
+from ui import schedule as sched
 from ui.common import STATUS_CHIPS, TRIGGER_BADGES, flash, log_line, when
 
+NS = "coord"
+SHIFT_REF_RE = re.compile(r"\s*\[shift_id=\w+\]$")
+GREETING = ("Hi! Ask me to find volunteers for a shift, or run a coverage scan. "
+            "My proposals show up in blue on the calendar for you to approve.")
+
+
+def _load(period: str) -> tuple[list[dict], dict, dict]:
+    """Shifts (with fill counts), pending proposals by shift id, and each shift's kind."""
+    shifts = [s for s in repo.shift_board(sched.fetch_days(period)) if s["status"] != "cancelled"]
+    proposals = defaultdict(list)
+    for a in repo.pending_approvals():
+        proposals[a["shift_id"]].append(a)
+    kind = {s["_id"]: "pending" if s["_id"] in proposals else s["status"] for s in shifts}
+    return shifts, proposals, kind
+
+
+def _status(s: dict, proposals: list[dict]) -> tuple[str, str]:
+    if proposals:
+        return "proposal pending", "pending"
+    return STATUS_CHIPS.get(s["status"], s["status"]), s["status"] if s["status"] in sched.KINDS else "muted"
+
+
+# ---------- sidebar ----------
+
+def sidebar() -> None:
+    with st.container(key="side_card"):
+        sched.sidebar_nav(NS)
+        task_list()
+
+
+@st.fragment(run_every=3)
+def task_list() -> None:
+    period = sched.period(NS)
+    shifts, _, kind = _load(period)
+    todo, covered = [], []
+    for s in (s for s in shifts if sched.in_period(s, period)):
+        fill = f"{s['confirmed_count']}/{s['required_count']}"
+        if kind[s["_id"]] == "pending":
+            todo.append((s, "pending", "review"))
+        elif s["open_slots"] > 0:
+            todo.append((s, "open", fill))
+        else:
+            covered.append((s, "filled", fill))
+    sched.task_items(NS, [("Needs action", todo), ("Covered", covered)], "No shifts in this period.")
+
+
+# ---------- pages ----------
 
 def render() -> None:
-    st.title("🧭 Coordinator dashboard")
-    metrics_row()
-    left, right = st.columns([3, 2], gap="large")
-    with left:
-        st.subheader("✋ Approval queue")
-        st.caption("The agent proposes. Nothing reaches a volunteer until you approve.")
-        approval_queue()
-    with right:
-        ask_agent()
-        st.subheader("🤖 Agent activity")
-        activity_feed()
-    st.subheader("🗓️ Shift board · next 14 days")
-    shift_board()
+    page, shift_id = sched.current_page(NS)
+    if page == "task" and shift_id:
+        task_page(shift_id)
+    else:
+        calendar_page()
+    assistant()
 
 
 @st.fragment(run_every=3)
-def metrics_row() -> None:
-    m = repo.dashboard_metrics()
-    c = st.columns(4)
-    c[0].metric("Open slots · 7 days", m["open_slots_7d"])
-    c[1].metric("Fill rate · 7 days", f"{m['fill_rate_7d']:.0%}")
-    c[2].metric("Pending approvals", m["pending_approvals"])
-    c[3].metric("Agent runs today", m["agent_runs_today"])
+def calendar_page() -> None:
+    period = sched.period(NS)
+    shifts, proposals, kind = _load(period)
+    in_view = [s for s in shifts if sched.in_period(s, period)]
+    need = sum(1 for s in in_view if s["open_slots"] > 0 or s["_id"] in proposals)
+    st.caption(f"This {period.lower()} · {len(in_view)} shifts · {need} need action · "
+               f"{sum(len(v) for v in proposals.values())} proposal(s) to review")
+
+    events = [sched.event(s, kind[s["_id"]], f"{s['title']} ({s['confirmed_count']}/{s['required_count']})")
+              for s in shifts]
+    sched.shift_calendar(events, NS)
+    sched.legend([("Needs volunteers", "open"), ("Filled", "filled"), ("Proposal to review", "pending")])
+
+    by_id = {str(s["_id"]): s for s in shifts}
+    sched.peek(NS, by_id.get(sched.peek_id(NS) or ""),
+               lambda s: peek_card(s, proposals.get(s["_id"], [])))
 
 
-# ---------- approval queue ----------
+def peek_card(s: dict, proposals: list[dict]) -> None:
+    sched.shift_header(s, *_status(s, proposals))
+    crew = repo.shift_crews([s["_id"]]).get(s["_id"], [])
+    details = [f"Crew: {', '.join(crew)}" if crew else "Crew: nobody yet"]
+    if s.get("required_skills"):
+        details.append(f"Needs: {', '.join(s['required_skills'])}")
+    st.caption(" · ".join(details))
+    if proposals:
+        if st.button(f"Review {len(proposals)} proposal(s)", icon=":material/fact_check:", type="primary",
+                     key=f"peek_review_{s['_id']}"):
+            sched.go(NS, "task", str(s["_id"]))
+            st.rerun()
+    elif s["open_slots"] > 0:
+        find_button(s)
+
+
+def find_button(s: dict) -> None:
+    sid = str(s["_id"])
+    if st.button(f"Find volunteers ({s['open_slots']} open)", key=f"find_{sid}",
+                 icon=":material/person_search:"):
+        start = repo.to_local(s["start"])
+        text = (f"Find {s['open_slots']} volunteer(s) for {s['title']} "
+                f"on {start:%a %b %-d, %-I:%M %p}")
+        st.session_state["agent_request"] = ("custom_request", {"text": f"{text} [shift_id={sid}]"}, text)
+        st.session_state["chat_open"] = True
+        st.rerun()
+
 
 @st.fragment(run_every=3)
-def approval_queue() -> None:
-    approvals = repo.pending_approvals()
-    if not approvals:
-        st.info("All caught up. New proposals appear here automatically.")
+def task_page(shift_id: str) -> None:
+    sched.back_link(NS)
+    shift = repo.get_shift(shift_id)
+    if shift is None:
+        st.info("This shift no longer exists.")
         return
-    for a in approvals:
-        approval_card(a)
+    confirmed = repo.confirmed_count(shift["_id"])
+    s = shift | {"confirmed_count": confirmed, "open_slots": max(0, shift["required_count"] - confirmed)}
+    proposals = [a for a in repo.pending_approvals() if a["shift_id"] == s["_id"]]
+
+    sched.page_title(s, *_status(s, proposals))
+    sched.properties(s)
+    st.subheader("About")
+    st.write(s["description"])
+
+    if proposals:
+        proposals_panel(s, proposals)
+
+    st.subheader("Volunteers")
+    sched.roster_table(s["_id"])
+    if s["open_slots"] > 0 and not proposals:
+        find_button(s)
+
+    requests = repo.shift_requests(s["_id"])
+    if requests:
+        st.subheader("Requests sent")
+        st.dataframe([{
+            "Volunteer": m["name"],
+            "Status": STATUS_CHIPS.get(m["status"], m["status"]),
+            "Sent": f"{repo.to_local(m['sent_at']):%b %-d, %-I:%M %p}" if m.get("sent_at") else "",
+            "Responded": f"{repo.to_local(m['responded_at']):%b %-d, %-I:%M %p}" if m.get("responded_at") else "",
+        } for m in requests], hide_index=True, width="stretch")
+
+
+# ---------- approvals ----------
+
+def proposals_panel(s: dict, proposals: list[dict]) -> None:
+    """Agent proposals for this shift, in their own panel on the right. Can be tucked away."""
+    hidden_key = f"{NS}__hide_proposals_{s['_id']}"
+    if st.session_state.get(hidden_key):
+        with st.container(horizontal=True, vertical_alignment="center"):
+            st.markdown(f":blue-badge[:material/auto_awesome: {len(proposals)} agent proposal(s) waiting]",
+                        width="content")
+            if st.button("Review", icon=":material/right_panel_open:", key=f"show_props_{s['_id']}"):
+                st.session_state[hidden_key] = False
+                st.rerun()
+        return
+    floating.reserve_right(480)
+    with st.container(key="proposals"):
+        with st.container(horizontal=True, vertical_alignment="center", horizontal_alignment="distribute"):
+            st.markdown(":blue[:material/auto_awesome:] **Agent proposal**", width="content")
+            if st.button("", icon=":material/close:", type="tertiary", key=f"hide_props_{s['_id']}",
+                         help="Hide proposals"):
+                st.session_state[hidden_key] = True
+                st.rerun()
+        st.caption("Nothing reaches a volunteer until you approve.")
+        for a in proposals:
+            approval_panel(a)
 
 
 def _trigger_text(a: dict) -> str:
@@ -57,23 +188,16 @@ def _trigger_text(a: dict) -> str:
             return f"{v['name'] if v else 'A volunteer'} cancelled"
         return "Re-proposal after candidates declined" if signup is None else "Vacancy"
     if trig.get("type") == "custom_request":
-        return f"“{trig.get('text', '')}”"
+        return f"“{SHIFT_REF_RE.sub('', trig.get('text', ''))}”"
     return "Coverage scan"
 
 
-def approval_card(a: dict) -> None:
+def approval_panel(a: dict) -> None:
     aid = str(a["_id"])
-    shift = repo.get_shift(a["shift_id"])
-    if shift is None:
-        return
     names = repo.volunteer_names([c["volunteer_id"] for c in a["candidates"]])
     with st.container(border=True):
-        badge = TRIGGER_BADGES.get(a["trigger"].get("type"), "🤖")
-        open_slots = max(0, shift["required_count"] - repo.confirmed_count(shift["_id"]))
-        st.markdown(f"**{badge}** · {_trigger_text(a)}")
-        st.markdown(f"#### {shift['title']}")
-        st.caption(f"{when(shift['start'], shift['end'])} · 📍 {shift['location']} · "
-                   f"{open_slots} open slot(s)")
+        badge = TRIGGER_BADGES.get(a["trigger"].get("type"), "Agent")
+        st.markdown(f":gray[{badge} · {_trigger_text(a)}]")
         st.write(a["summary"])
 
         selected, drafts = [], {}
@@ -94,16 +218,16 @@ def approval_card(a: dict) -> None:
 
         note = st.text_input("Note (optional)", key=f"note_{aid}", placeholder="e.g. prefer Wei, he asked for more shifts")
         b = st.columns([2, 1, 3])
-        if b[0].button(f"✅ Approve selected ({len(selected)})", key=f"approve_{aid}", type="primary",
+        if b[0].button(f"Approve selected ({len(selected)})", key=f"approve_{aid}", type="primary",
                        disabled=not selected):
             res = actions.approve(aid, selected, drafts, note)
-            flash(res.message, "📨" if res.ok else "ℹ️")
+            flash(res.message)
             st.rerun()
         if b[1].button("Reject", key=f"reject_{aid}"):
             res = actions.reject(aid, note)
-            flash(res.message, "🗑️")
+            flash(res.message)
             st.rerun()
-        with st.expander("🔍 Why? (agent reasoning & tool calls)"):
+        with st.expander("Why? (agent reasoning & tool calls)"):
             render_run_log(a["agent_run_id"])
 
 
@@ -115,61 +239,84 @@ def render_run_log(run_id: str) -> None:
         st.markdown(f"`{e['step']:>2}` {log_line(e)}")
 
 
-# ---------- agent requests ----------
+# ---------- agent chat panel (side) ----------
 
-def _run_with_status(trigger: str, payload: dict, label: str) -> None:
-    """Run the agent behind a spinner and show only the outcome (steps stay in 🔍 Why?)."""
+def assistant() -> None:
+    """Floating assistant: a round button bottom-right opens a pill chat bar; the conversation
+    shows in a panel above it."""
+    is_open = st.session_state.get("chat_open", False)
+    with st.container(key="fab"):
+        if st.button("", icon=":material/close:" if is_open else ":material/auto_awesome:",
+                     key="fab_btn", help="Close assistant" if is_open else "Ask the assistant"):
+            st.session_state["chat_open"] = not is_open
+            st.rerun()
+    if not is_open:
+        return
+
+    history = st.session_state.setdefault("chat", [{"role": "assistant", "content": GREETING}])
+    with st.container(key="chatbar", horizontal=True, vertical_alignment="center"):
+        with st.container(key="chat_spark", width="content"):
+            st.markdown(":material/auto_awesome:")
+        prompt = st.chat_input("Ask the assistant to find volunteers…", key="chat_prompt")
+        if st.button("", icon=":material/forum:", type="tertiary", key="chat_panel_btn",
+                     help="Show conversation"):
+            st.session_state["chat_panel"] = not st.session_state.get("chat_panel", False)
+
+    req = st.session_state.pop("agent_request", None)
+    if prompt:
+        req = ("custom_request", {"text": prompt}, prompt)
+    if req:
+        st.session_state["chat_panel"] = True
+    if not st.session_state.get("chat_panel"):
+        return
+
+    with st.container(key="chatpanel"):
+        with st.container(horizontal=True, vertical_alignment="center", horizontal_alignment="distribute"):
+            st.markdown("**Assistant**", width="content")
+            if st.button("Coverage scan", icon=":material/radar:", type="tertiary", key="chat_scan"):
+                st.session_state["agent_request"] = ("coverage_scan", {"days": 7},
+                                                     "Run a coverage scan for the next 7 days")
+                st.rerun()
+        for m in history:
+            st.chat_message(m["role"]).markdown(m["content"])
+        if req:
+            trigger, payload, shown = req
+            st.chat_message("user").markdown(shown)
+            with st.chat_message("assistant"):
+                reply = _run_with_status(trigger, payload)
+            history += [{"role": "user", "content": shown}, {"role": "assistant", "content": reply}]
+        with st.expander("Activity log"):
+            activity_feed()
+
+
+def _run_with_status(trigger: str, payload: dict) -> str:
+    """Run the agent behind a spinner and return only the outcome as a chat reply
+    (the steps stay in the proposal's Why? log)."""
     try:
-        with st.spinner(label):
+        with st.spinner("Working on it…"):
             run_id = run_agent(trigger, payload)
     except Exception as e:  # noqa: BLE001 - surface in UI, keep app alive
-        st.error(f"Agent error: {type(e).__name__}: {e}")
-        return
+        return f"Sorry, something went wrong: {type(e).__name__}: {e}"
     log = get_run_log(run_id)
     approvals = get_run_approvals(run_id)
     errors = [e for e in log if e["kind"] == "error"]
     if approvals:
-        st.success(f"{len(approvals)} new proposal(s) added to the approval queue.")
-    elif errors:
-        st.error(f"The agent couldn't finish: {errors[-1]['content'][:200]}")
-    else:
-        final = next((e["content"] for e in reversed(log) if e["kind"] == "final"), "")
-        st.info(final or "The agent didn't find anything to propose.")
+        lines = []
+        for a in approvals:
+            s = repo.get_shift(a["shift_id"])
+            lines.append(f"- **{s['title']}** · {when(s['start'], s['end'])}" if s else "- (unknown shift)")
+        return (f"{len(approvals)} new proposal(s) are waiting for your approval:\n" + "\n".join(lines))
+    if errors:
+        return f"I couldn't finish this one: {errors[-1]['content'][:200]}"
+    final = next((e["content"] for e in reversed(log) if e["kind"] == "final"), "")
+    return final or "I didn't find anything to propose."
 
 
-def ask_agent() -> None:
-    st.subheader("💬 Ask the agent")
-    with st.form("nl_request", clear_on_submit=False):
-        text = st.text_input("Request", placeholder="Need 2 more drivers for Saturday's pantry delivery",
-                             label_visibility="collapsed")
-        submitted = st.form_submit_button("Ask", type="primary")
-    if submitted and text.strip():
-        _run_with_status("custom_request", {"text": text.strip()}, "Agent is working on your request…")
-    if st.button("📋 Run coverage scan (next 7 days)"):
-        _run_with_status("coverage_scan", {"days": 7}, "Scanning coverage gaps…")
-
-
-# ---------- feed & board ----------
-
-@st.fragment(run_every=3)
 def activity_feed() -> None:
     entries = repo.recent_agent_log(30)
-    with st.container(height=380, border=True):
+    with st.container(height=280):
         if not entries:
             st.caption("No agent activity yet.")
         for e in entries:
             badge = TRIGGER_BADGES.get(e.get("trigger", ""), "")
             st.markdown(f":gray[{repo.to_local(e['ts']):%H:%M:%S} · {badge}]  \n{log_line(e)}")
-
-
-@st.fragment(run_every=3)
-def shift_board() -> None:
-    rows = [{
-        "When": when(s["start"], s["end"]),
-        "Shift": s["title"],
-        "Location": s["location"],
-        "Filled": f"{s['confirmed_count']}/{s['required_count']}",
-        "Status": STATUS_CHIPS.get(s["status"], s["status"]),
-        "Skills": ", ".join(s.get("required_skills", [])),
-    } for s in repo.shift_board(14)]
-    st.dataframe(rows, width="stretch", hide_index=True)
