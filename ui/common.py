@@ -12,6 +12,7 @@ STATUS_CHIPS = {"open": "open", "filled": "filled", "cancelled": "cancelled",
                 "sent": "awaiting reply", "accepted": "accepted",
                 "declined": "declined", "withdrawn": "withdrawn",
                 "unread": "new update", "read": "update read"}
+EMAIL_CHIPS = {"queued": "queued", "sending": "sending", "sent": "emailed", "failed": "failed"}
 TRIGGER_BADGES = {"vacancy": "Vacancy", "coverage_scan": "Coverage",
                   "custom_request": "Request", "weather_check": "Weather"}
 LOG_LABELS = {"thought": "thought", "tool_call": "call", "tool_result": "result",

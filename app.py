@@ -12,7 +12,7 @@ from core import db, repo, weather  # noqa: E402
 from core import config  # noqa: E402
 from core.config import ConfigError  # noqa: E402
 from core.embeddings import get_model  # noqa: E402
-from ui import coordinator_view, volunteer_view  # noqa: E402
+from ui import coordinator_view, respond_view, volunteer_view  # noqa: E402
 from ui.common import flash, show_flash  # noqa: E402
 from ui.floating import inject_css, logo  # noqa: E402
 from scripts.seed import ORG  # noqa: E402
@@ -44,6 +44,9 @@ def main() -> None:
 
     show_flash()
     inject_css()
+    if token := st.query_params.get("respond"):  # signed link from a request email
+        respond_view.render(token)
+        st.stop()
     volunteers = repo.list_volunteers()
     view, volunteer = current_identity(volunteers)
     with st.sidebar:

@@ -12,7 +12,7 @@ from agent.harness import get_run_approvals, get_run_log, run_agent
 from core import actions, repo
 from ui import floating
 from ui import schedule as sched
-from ui.common import STATUS_CHIPS, TRIGGER_BADGES, flash, log_line, when
+from ui.common import EMAIL_CHIPS, STATUS_CHIPS, TRIGGER_BADGES, flash, log_line, when
 
 NS = "coord"
 SHIFT_REF_RE = re.compile(r"\s*\[shift_id=\w+\]$")
@@ -167,7 +167,8 @@ def task_page(shift_id: str) -> None:
         st.dataframe([{
             "Volunteer": m["name"],
             "Status": STATUS_CHIPS.get(m["status"], m["status"]),
-            "Sent": f"{repo.to_local(m['sent_at']):%b %-d, %-I:%M %p}" if m.get("sent_at") else "",
+            "Email": EMAIL_CHIPS.get(m.get("delivery", {}).get("email", {}).get("status"), "—"),
+            "Sent":f"{repo.to_local(m['sent_at']):%b %-d, %-I:%M %p}" if m.get("sent_at") else "",
             "Responded": f"{repo.to_local(m['responded_at']):%b %-d, %-I:%M %p}" if m.get("responded_at") else "",
         } for m in requests], hide_index=True, width="stretch")
 

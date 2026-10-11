@@ -45,6 +45,9 @@ def approve(approval_id: str | ObjectId, selected_ids: list[str],
                 "approval_id": approval["_id"], "shift_id": approval["shift_id"],
                 "to_volunteer_id": c["volunteer_id"], "body": draft,
                 "status": "sent", "sent_at": now, "responded_at": None,
+                # Outbox: notifier.py delivers this; written with the message so it can't be lost.
+                "delivery": {"email": {"status": "queued", "attempts": 0,
+                                       "next_attempt_at": now, "error": None}},
             })
     db.approvals().update_one({"_id": approval["_id"]}, {"$set": {"candidates": candidates}})
     if outgoing:
@@ -79,6 +82,8 @@ def approve_weather(approval_id: str | ObjectId, option_index: int, notice: str,
             "kind": "notice", "approval_id": approval["_id"], "shift_id": approval["shift_id"],
             "to_volunteer_id": vid, "body": notice, "status": "unread",
             "sent_at": now, "responded_at": None,
+            "delivery": {"email": {"status": "queued", "attempts": 0,
+                                   "next_attempt_at": now, "error": None}},
         } for vid in crew])
     return Result(True, f"Plan set: {choice['title']}. Notified {len(crew)} volunteer(s).")
 

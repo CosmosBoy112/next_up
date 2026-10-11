@@ -9,7 +9,7 @@ Python 3.11 이상이 필요합니다. macOS 기본 Python은 3.9라서 맞지 �
 ```bash
 brew install python@3.12
 
-cd "/Users/woojoosong/Desktop/Projects/c0mpatible hackathon/next_up"
+cd next_up                  # 저장소를 clone한 폴더
 /opt/homebrew/bin/python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -48,6 +48,14 @@ streamlit run app.py
 브라우저에서 http://localhost:8501 이 열립니다.
 
 > ⚠️ `worker.py`를 켜지 않으면 봉사자가 취소해도 에이전트가 반응하지 않습니다.
+
+```bash
+# (선택) 터미널 3: 이메일 발송 워커 — 코디네이터가 승인한 요청을 이메일로 보냄
+source .venv/bin/activate
+python notifier.py
+```
+
+> 기본값 `EMAIL_PROVIDER=console`은 실제로 보내지 않고 터미널에 로그만 찍습니다. 실제 발송은 `.env`에서 `smtp` 또는 `resend`로 바꾸고 `RESPONSE_LINK_SECRET`을 설정하세요. 데모 중에는 `EMAIL_REDIRECT_TO`로 모든 메일을 한 주소로 모을 수 있습니다.
 
 ## 3. 데모 시나리오
 
