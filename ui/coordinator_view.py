@@ -89,10 +89,6 @@ def render() -> None:
 def calendar_page() -> None:
     period = sched.period(NS)
     shifts, proposals, kind = _load(period)
-    in_view = [s for s in shifts if sched.in_period(s, period)]
-    need = sum(1 for s in in_view if s["open_slots"] > 0 or s["_id"] in proposals)
-    st.caption(f"This {period.lower()} · {len(in_view)} shifts · {need} need action · "
-               f"{sum(len(v) for v in proposals.values())} proposal(s) to review")
 
     events = [sched.event(s, kind[s["_id"]], f"{s['title']} ({s['confirmed_count']}/{s['required_count']})")
               for s in shifts]

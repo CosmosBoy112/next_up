@@ -116,8 +116,6 @@ def render(volunteer: dict) -> None:
 def calendar_page(volunteer: dict) -> None:
     ns = _ns(volunteer)
     shifts, kinds, ctx = _classify(volunteer, sched.period(ns))
-    st.caption(f"{volunteer['name']} · {', '.join(volunteer.get('skills', [])) or 'no skills listed'}"
-               + (" · can drive" if volunteer.get("can_drive") else ""))
 
     titles = {"mine": "{t}", "request": "Request: {t}", "recommended": "{t} · for you",
               "open": "{t}", "muted": "{t}"}
