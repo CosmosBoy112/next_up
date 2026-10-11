@@ -278,6 +278,19 @@ def shift_board(days: int = 14) -> list[dict]:
     return list(db.shifts().aggregate(pipeline))
 
 
+def shift_crews(shift_ids: list[ObjectId]) -> dict[ObjectId, list[str]]:
+    """shift_id -> names of confirmed volunteers."""
+    pipeline = [
+        {"$match": {"shift_id": {"$in": shift_ids}, "status": "confirmed"}},
+        {"$lookup": {"from": "volunteers", "localField": "volunteer_id", "foreignField": "_id",
+                     "pipeline": [{"$project": {"name": 1}}], "as": "v"}},
+        {"$unwind": "$v"},
+        {"$sort": {"v.name": 1}},
+        {"$group": {"_id": "$shift_id", "names": {"$push": "$v.name"}}},
+    ]
+    return {r["_id"]: r["names"] for r in db.signups().aggregate(pipeline)}
+
+
 def dashboard_metrics() -> dict:
     """Open slots / fill rate (next 7 days), pending approvals, agent runs today."""
     week = [s for s in shift_board(7) if s["status"] != "cancelled"]

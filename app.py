@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-st.set_page_config(page_title="VolunteerOps", page_icon="🤝", layout="wide")
+st.set_page_config(page_title="VolunteerOps", layout="wide")
 
 from core import db, repo  # noqa: E402
 from core.config import ConfigError  # noqa: E402
@@ -31,31 +31,39 @@ def main() -> None:
         init_db()
         init_model()
     except ConfigError as e:
-        st.error(f"⚙️ {e}")
+        st.error(str(e))
         st.stop()
     except Exception as e:  # noqa: BLE001
         st.error(f"Could not connect to MongoDB: {type(e).__name__}: {e}")
         st.stop()
 
     show_flash()
-    st.sidebar.title("🤝 VolunteerOps")
-    st.sidebar.caption("Valley Community Pantry")
-    view = st.sidebar.radio("View", ["Coordinator", "Volunteer"], key="view")
+    volunteers = repo.list_volunteers()
+    view, volunteer = header(volunteers)
 
     if view == "Volunteer":
-        volunteers = repo.list_volunteers()
-        if not volunteers:
+        if volunteer is None:
             st.info("No volunteers yet. Run `python scripts/reset_demo.py`.")
             st.stop()
-        names = [v["name"] for v in volunteers]
-        default = names.index("Alex Rivera") if "Alex Rivera" in names else 0
-        name = st.sidebar.selectbox("Logged in as", names, index=default, key="as_volunteer")
-        volunteer_view.render(next(v for v in volunteers if v["name"] == name))
+        volunteer_view.render(volunteer)
     else:
         coordinator_view.render()
 
-    st.sidebar.divider()
-    st.sidebar.caption("🤖 The agent proposes. The coordinator decides.")
+
+def header(volunteers: list[dict]) -> tuple[str, dict | None]:
+    """App bar with a Settings popover for switching views (replaces the sidebar)."""
+    brand, settings = st.columns([6, 1], vertical_alignment="center")
+    brand.markdown("**VolunteerOps** · :gray[Valley Community Pantry]")
+    with settings.popover("Settings", icon=":material/settings:", width="stretch"):
+        view = st.radio("View", ["Coordinator", "Volunteer"], key="view", horizontal=True)
+        volunteer = None
+        if view == "Volunteer" and volunteers:
+            names = [v["name"] for v in volunteers]
+            default = names.index("Alex Rivera") if "Alex Rivera" in names else 0
+            name = st.selectbox("Logged in as", names, index=default, key="as_volunteer")
+            volunteer = next(v for v in volunteers if v["name"] == name)
+        st.caption("The agent proposes. The coordinator decides.")
+    return view, volunteer
 
 
 main()
