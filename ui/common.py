@@ -10,9 +10,10 @@ from core.repo import to_local
 
 STATUS_CHIPS = {"open": "open", "filled": "filled", "cancelled": "cancelled",
                 "sent": "awaiting reply", "accepted": "accepted",
-                "declined": "declined", "withdrawn": "withdrawn"}
+                "declined": "declined", "withdrawn": "withdrawn",
+                "unread": "new update", "read": "update read"}
 TRIGGER_BADGES = {"vacancy": "Vacancy", "coverage_scan": "Coverage",
-                  "custom_request": "Request"}
+                  "custom_request": "Request", "weather_check": "Weather"}
 LOG_LABELS = {"thought": "thought", "tool_call": "call", "tool_result": "result",
               "final": "final", "error": "error"}
 

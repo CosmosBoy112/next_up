@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 import streamlit as st
 
 st.set_page_config(page_title="NextUp", page_icon=":material/keyboard_double_arrow_up:", layout="wide", initial_sidebar_state="expanded")
 
-from core import db, repo  # noqa: E402
+from core import db, repo, weather  # noqa: E402
+from core import config  # noqa: E402
 from core.config import ConfigError  # noqa: E402
 from core.embeddings import get_model  # noqa: E402
 from ui import coordinator_view, volunteer_view  # noqa: E402
-from ui.common import show_flash  # noqa: E402
+from ui.common import flash, show_flash  # noqa: E402
 from ui.floating import inject_css, logo  # noqa: E402
 from scripts.seed import ORG  # noqa: E402
+
 
 @st.cache_resource(show_spinner="Connecting to MongoDB…")
 def init_db():
@@ -85,5 +89,31 @@ def account_switcher(view: str, volunteer: dict | None, volunteers: list[dict]) 
             st.selectbox("Volunteer", names, key="as_volunteer",
                          index=names.index(volunteer["name"]) if volunteer else 0)
         st.caption("Demo accounts: switch between the coordinator and any volunteer.")
+        if view == "Coordinator" and config.demo_mode():
+            weather_demo()
+
+
+def weather_demo() -> None:
+    """Force a bad forecast on one day so the weather agent has something to react to."""
+    st.divider()
+    demo = weather.get_demo()
+    today = repo.to_local(repo.now_utc()).date()
+    days = [today + timedelta(days=i) for i in range(1, 8)]
+    saturday = next(d for d in days if d.weekday() == 5)
+    stored = date.fromisoformat(demo["date"]) if demo.get("date") else None
+    on = st.toggle("Demo: simulate bad weather", value=bool(demo.get("enabled")), key="wx_demo_on")
+    c = st.columns(2)
+    day = c[0].selectbox("Day", days, index=days.index(stored) if stored in days else days.index(saturday),
+                         format_func=lambda d: f"{d:%a %b %-d}", key="wx_demo_day")
+    scenario = c[1].selectbox("Scenario", list(weather.SCENARIOS), key="wx_demo_scenario",
+                              index=list(weather.SCENARIOS).index(demo.get("scenario", "thunderstorm")),
+                              format_func=lambda k: k.replace("_", " ").capitalize())
+    if st.button("Apply", key="wx_demo_apply", width="stretch"):
+        weather.set_demo(on, day, scenario)
+        if on:  # the worker picks this up right away
+            db.agent_triggers().insert_one({"type": "weather_scan", "created_at": repo.now_utc()})
+        flash(f"Demo weather {'on' if on else 'off'}"
+              + (f": {scenario.replace('_', ' ')} on {day:%a %b %-d}." if on else "."))
+        st.rerun()
 
 main()

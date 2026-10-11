@@ -305,7 +305,8 @@ def shift_roster(shift_id: str | ObjectId) -> list[dict]:
 
 def shift_requests(shift_id: str | ObjectId) -> list[dict]:
     """Requests sent for a shift (newest first), each with the recipient's name."""
-    msgs = list(db.messages().find({"shift_id": oid(shift_id)}).sort("sent_at", -1))
+    msgs = list(db.messages().find({"shift_id": oid(shift_id), "kind": {"$ne": "notice"}})
+                .sort("sent_at", -1))
     names = volunteer_names([m["to_volunteer_id"] for m in msgs])
     return [m | {"name": names.get(m["to_volunteer_id"], "Unknown")} for m in msgs]
 

@@ -40,3 +40,9 @@ def db_name() -> str:
 def llm_settings() -> tuple[str, str, str]:
     """(base_url, api_key, model)"""
     return require("LLM_BASE_URL"), require("LLM_API_KEY"), require("LLM_MODEL")
+
+
+def demo_mode() -> bool:
+    """NEXTUP_DEMO=1 enables demo-only features (the simulated-weather switch). Off by default,
+    so a normal deployment always uses the real forecast."""
+    return os.getenv("NEXTUP_DEMO", "").strip().lower() in ("1", "true", "yes", "on")

@@ -26,6 +26,9 @@ MAX_STEPS = 12
 LOG_CHARS = 1000
 NUDGE = ("Your last reply was empty. Call finish with a one-line answer for the coordinator "
          "(or propose_action if a proposal is actually needed).")
+NUDGE_CONTINUE = ("You replied with text but didn't call a tool. If you still intend to act "
+                  "(e.g. propose_action or propose_weather_plan), call that tool now. "
+                  "If you are done, call finish with your answer.")
 
 _llm: LLM | None = None
 
@@ -74,11 +77,12 @@ def run_agent(trigger_type: str, payload: dict, llm: LLM | None = None) -> str:
             log.log("error", f"LLM call failed: {type(e).__name__}: {str(e)[:300]}")
             return run_id
         if not turn.tool_calls:
-            if not turn.text.strip() and not nudged:
-                # Thinking models sometimes stop with an empty reply; ask once for an answer.
+            if not nudged:
+                # Thinking models sometimes stop with an empty reply, or announce the next
+                # step ("Queuing plans...") without calling the tool; ask once to act or finish.
                 nudged = True
                 messages.append(turn.as_message())
-                messages.append({"role": "user", "content": NUDGE})
+                messages.append({"role": "user", "content": NUDGE if not turn.text.strip() else NUDGE_CONTINUE})
                 continue
             log.log("final", turn.text.strip() or "No proposal was needed for this request.")
             return run_id

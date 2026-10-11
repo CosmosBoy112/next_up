@@ -52,6 +52,44 @@ def approve(approval_id: str | ObjectId, selected_ids: list[str],
     return Result(True, f"Sent {len(outgoing)} request(s).")
 
 
+def approve_weather(approval_id: str | ObjectId, option_index: int, notice: str,
+                    note: str = "") -> Result:
+    """Coordinator picks a weather alternative: record it on the shift and send the notice
+    to everyone confirmed for the shift."""
+    notice = notice.strip()
+    if not notice:
+        return Result(False, "The notice to the crew can't be empty.")
+    approval = db.approvals().find_one_and_update(
+        {"_id": oid(approval_id), "status": "pending", "kind": "weather_alert"},
+        {"$set": {"status": "approved", "decided_at": now_utc(), "coordinator_note": note,
+                  "chosen": option_index}},
+    )
+    if approval is None:
+        return Result(False, "This weather plan was already decided.")
+    choice = approval["alternatives"][option_index] | {"notice_message": notice}
+    now = now_utc()
+    db.shifts().update_one({"_id": approval["shift_id"]}, {"$set": {"weather_plan": {
+        "option": choice["option"], "title": choice["title"], "details": choice["details"],
+        "severity": approval["weather"]["severity"], "reasons": approval["weather"]["reasons"],
+        "approval_id": approval["_id"], "decided_at": now,
+    }}})
+    crew = db.signups().distinct("volunteer_id", {"shift_id": approval["shift_id"], "status": "confirmed"})
+    if crew:
+        db.messages().insert_many([{
+            "kind": "notice", "approval_id": approval["_id"], "shift_id": approval["shift_id"],
+            "to_volunteer_id": vid, "body": notice, "status": "unread",
+            "sent_at": now, "responded_at": None,
+        } for vid in crew])
+    return Result(True, f"Plan set: {choice['title']}. Notified {len(crew)} volunteer(s).")
+
+
+def mark_notices_read(volunteer_id: str | ObjectId, shift_id: str | ObjectId) -> None:
+    db.messages().update_many(
+        {"to_volunteer_id": oid(volunteer_id), "shift_id": oid(shift_id), "kind": "notice",
+         "status": "unread"},
+        {"$set": {"status": "read", "responded_at": now_utc()}})
+
+
 def reject(approval_id: str | ObjectId, note: str = "") -> Result:
     res = db.approvals().update_one(
         {"_id": oid(approval_id), "status": "pending"},

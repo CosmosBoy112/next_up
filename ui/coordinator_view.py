@@ -16,8 +16,8 @@ from ui.common import STATUS_CHIPS, TRIGGER_BADGES, flash, log_line, when
 
 NS = "coord"
 SHIFT_REF_RE = re.compile(r"\s*\[shift_id=\w+\]$")
-GREETING = ("Hi! Ask me to find volunteers for a shift, or run a coverage scan. "
-            "My proposals show up in blue on the calendar for you to approve.")
+GREETING = ("Hi! Ask me to find volunteers for a shift, check the weather for outdoor shifts, "
+            "or run a coverage scan. My proposals show up on the calendar for you to approve.")
 
 
 def _load(period: str) -> tuple[list[dict], dict, dict]:
@@ -26,11 +26,23 @@ def _load(period: str) -> tuple[list[dict], dict, dict]:
     proposals = defaultdict(list)
     for a in repo.pending_approvals():
         proposals[a["shift_id"]].append(a)
-    kind = {s["_id"]: "pending" if s["_id"] in proposals else s["status"] for s in shifts}
+    kind = {s["_id"]: _kind(s, proposals.get(s["_id"], [])) for s in shifts}
     return shifts, proposals, kind
 
 
+def _is_weather(proposals: list[dict]) -> bool:
+    return any(a.get("kind") == "weather_alert" for a in proposals)
+
+
+def _kind(s: dict, proposals: list[dict]) -> str:
+    if _is_weather(proposals):
+        return "weather"
+    return "pending" if proposals else s["status"]
+
+
 def _status(s: dict, proposals: list[dict]) -> tuple[str, str]:
+    if _is_weather(proposals):
+        return "weather alert", "weather"
     if proposals:
         return "proposal pending", "pending"
     return STATUS_CHIPS.get(s["status"], s["status"]), s["status"] if s["status"] in sched.KINDS else "muted"
@@ -51,7 +63,9 @@ def task_list() -> None:
     todo, covered = [], []
     for s in (s for s in shifts if sched.in_period(s, period)):
         fill = f"{s['confirmed_count']}/{s['required_count']}"
-        if kind[s["_id"]] == "pending":
+        if kind[s["_id"]] == "weather":
+            todo.append((s, "weather", "weather"))
+        elif kind[s["_id"]] == "pending":
             todo.append((s, "pending", "review"))
         elif s["open_slots"] > 0:
             todo.append((s, "open", fill))
@@ -83,7 +97,8 @@ def calendar_page() -> None:
     events = [sched.event(s, kind[s["_id"]], f"{s['title']} ({s['confirmed_count']}/{s['required_count']})")
               for s in shifts]
     sched.shift_calendar(events, NS)
-    sched.legend([("Needs volunteers", "open"), ("Filled", "filled"), ("Proposal to review", "pending")])
+    sched.legend([("Needs volunteers", "open"), ("Filled", "filled"), ("Proposal to review", "pending"),
+                  ("Weather alert", "weather")])
 
     by_id = {str(s["_id"]): s for s in shifts}
     sched.peek(NS, by_id.get(sched.peek_id(NS) or ""),
@@ -97,9 +112,11 @@ def peek_card(s: dict, proposals: list[dict]) -> None:
     if s.get("required_skills"):
         details.append(f"Needs: {', '.join(s['required_skills'])}")
     st.caption(" · ".join(details))
+    if plan := s.get("weather_plan"):
+        st.caption(f":material/partly_cloudy_day: Weather plan: **{plan['title']}**")
     if proposals:
-        if st.button(f"Review {len(proposals)} proposal(s)", icon=":material/fact_check:", type="primary",
-                     key=f"peek_review_{s['_id']}"):
+        label = "Review weather plan" if _is_weather(proposals) else f"Review {len(proposals)} proposal(s)"
+        if st.button(label, icon=":material/fact_check:", type="primary", key=f"peek_review_{s['_id']}"):
             sched.go(NS, "task", str(s["_id"]))
             st.rerun()
     elif s["open_slots"] > 0:
@@ -130,7 +147,9 @@ def task_page(shift_id: str) -> None:
     proposals = [a for a in repo.pending_approvals() if a["shift_id"] == s["_id"]]
 
     sched.page_title(s, *_status(s, proposals))
-    sched.properties(s)
+    plan = s.get("weather_plan")
+    sched.properties(s, [("partly_cloudy_day", "Weather plan", f"**{plan['title']}** · {plan['details']}")]
+                     if plan else None)
     st.subheader("About")
     st.write(s["description"])
 
@@ -176,7 +195,10 @@ def proposals_panel(s: dict, proposals: list[dict]) -> None:
                 st.rerun()
         st.caption("Nothing reaches a volunteer until you approve.")
         for a in proposals:
-            approval_panel(a)
+            if a.get("kind") == "weather_alert":
+                weather_panel(a)
+            else:
+                approval_panel(a)
 
 
 def _trigger_text(a: dict) -> str:
@@ -189,7 +211,47 @@ def _trigger_text(a: dict) -> str:
         return "Re-proposal after candidates declined" if signup is None else "Vacancy"
     if trig.get("type") == "custom_request":
         return f"“{SHIFT_REF_RE.sub('', trig.get('text', ''))}”"
+    if trig.get("type") == "weather_check":
+        return "Weather check"
     return "Coverage scan"
+
+
+def weather_panel(a: dict) -> None:
+    """A weather warning: the forecast, the agent's alternatives, and the notice to the crew."""
+    aid = str(a["_id"])
+    w, f = a["weather"], a["weather"]["forecast"] or {}
+    with st.container(border=True):
+        badge = "red" if w["severity"] == "severe" else "orange"
+        source = " · simulated (demo)" if f.get("source") == "demo" else ""
+        st.markdown(f":{badge}-badge[{w['severity']}] **{f.get('condition', 'Forecast').capitalize()}**"
+                    f" :gray[· {_trigger_text(a)}{source}]")
+        if f:
+            tmin, tmax = f["temp_c"]
+            st.markdown(f":material/water_drop: {f['rain_chance_pct']}% · :material/rainy: {f['precip_mm']} mm · "
+                        f":material/air: {f['gust_kmh']} km/h · :material/thermostat: {tmin}–{tmax}°C")
+        st.markdown("\n".join(f"- {r}" for r in w["reasons"]))
+        st.write(a["summary"])
+
+        alts = a["alternatives"]
+        pick = st.radio("Choose a plan", range(len(alts)), key=f"wx_pick_{aid}",
+                        format_func=lambda i: alts[i]["title"], captions=[x["details"] for x in alts])
+        notice = st.text_area("Notice to the crew", alts[pick]["notice_message"], key=f"wx_notice_{aid}_{pick}",
+                              height=140)
+        crew = repo.confirmed_count(a["shift_id"])
+        note = st.text_input("Note (optional)", key=f"note_{aid}")
+        with st.container(horizontal=True):
+            approve = st.button(f"Approve & notify crew ({crew})", key=f"wx_ok_{aid}", type="primary")
+            dismiss = st.button("Dismiss", key=f"wx_no_{aid}")
+        if approve:
+            res = actions.approve_weather(aid, pick, notice, note)
+            flash(res.message)
+            st.rerun()
+        if dismiss:
+            res = actions.reject(aid, note)
+            flash(res.message)
+            st.rerun()
+        with st.expander("Why? (agent reasoning & tool calls)"):
+            render_run_log(a["agent_run_id"])
 
 
 def approval_panel(a: dict) -> None:
@@ -273,10 +335,16 @@ def assistant() -> None:
     with st.container(key="chatpanel"):
         with st.container(horizontal=True, vertical_alignment="center", horizontal_alignment="distribute"):
             st.markdown("**Assistant**", width="content")
-            if st.button("Coverage scan", icon=":material/radar:", type="tertiary", key="chat_scan"):
-                st.session_state["agent_request"] = ("coverage_scan", {"days": 7},
-                                                     "Run a coverage scan for the next 7 days")
-                st.rerun()
+            with st.container(horizontal=True, width="content"):
+                if st.button("Weather check", icon=":material/partly_cloudy_day:", type="tertiary",
+                             key="chat_weather"):
+                    st.session_state["agent_request"] = ("weather_check", {"days": 7},
+                                                         "Check the weather for outdoor shifts this week")
+                    st.rerun()
+                if st.button("Coverage scan", icon=":material/radar:", type="tertiary", key="chat_scan"):
+                    st.session_state["agent_request"] = ("coverage_scan", {"days": 7},
+                                                         "Run a coverage scan for the next 7 days")
+                    st.rerun()
         for m in history:
             st.chat_message(m["role"]).markdown(m["content"])
         if req:

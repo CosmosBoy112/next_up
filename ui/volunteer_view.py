@@ -45,9 +45,12 @@ def _classify(volunteer: dict, period: str) -> tuple[dict[str, dict], dict[str, 
         if sid in board:
             shifts[sid], kinds[sid] = board[sid], "recommended"
             ctx[sid] = {"score": r.get("score", 0)}
+    notices: dict[str, list[dict]] = {}
     for m in repo.inbox(vid):
         sid = str(m["shift_id"])
-        if m["status"] == "sent" and sid in board:
+        if m.get("kind") == "notice":
+            notices.setdefault(sid, []).append(m)
+        elif m["status"] == "sent" and sid in board:
             shifts[sid], kinds[sid] = board[sid], "request"
             ctx[sid] = {"message": m}
     for r in repo.my_upcoming_shifts(vid):
@@ -55,6 +58,9 @@ def _classify(volunteer: dict, period: str) -> tuple[dict[str, dict], dict[str, 
         if sid in board:
             shifts[sid], kinds[sid] = board[sid], "mine"
             ctx[sid] = {"signup": r["signup"]}
+    for sid, ns in notices.items():
+        if sid in shifts:
+            ctx.setdefault(sid, {})["notices"] = ns
     return shifts, kinds, ctx
 
 
@@ -81,13 +87,17 @@ def sidebar(volunteer: dict) -> None:
 def task_list(volunteer: dict) -> None:
     ns = _ns(volunteer)
     period = sched.period(ns)
-    shifts, kinds, _ = _classify(volunteer, period)
+    shifts, kinds, ctx = _classify(volunteer, period)
     groups = {"request": [], "mine": [], "recommended": []}
     tags = {"request": "request", "mine": "signed up", "recommended": "for you"}
+    updates = []
     for sid, s in sorted(shifts.items(), key=lambda kv: kv[1]["start"]):
+        if any(m["status"] == "unread" for m in ctx.get(sid, {}).get("notices", [])):
+            updates.append((s, "weather", "update"))
         if kinds[sid] in groups and sched.in_period(s, period):
             groups[kinds[sid]].append((s, kinds[sid], tags[kinds[sid]]))
-    sched.task_items(ns, [("Requests for you", groups["request"]), ("My shifts", groups["mine"]),
+    sched.task_items(ns, [("Updates", updates), ("Requests for you", groups["request"]),
+                          ("My shifts", groups["mine"]),
                           ("Recommended", groups["recommended"])],
                      "Nothing scheduled in this period. Open shifts are on the calendar.")
 
@@ -111,7 +121,8 @@ def calendar_page(volunteer: dict) -> None:
 
     titles = {"mine": "{t}", "request": "Request: {t}", "recommended": "{t} · for you",
               "open": "{t}", "muted": "{t}"}
-    events = [sched.event(s, kinds[sid], titles[kinds[sid]].format(t=s["title"]))
+    events = [sched.event(s, kinds[sid], titles[kinds[sid]].format(t=s["title"])
+                          + (" · weather plan" if s.get("weather_plan") and kinds[sid] == "mine" else ""))
               for sid, s in sorted(shifts.items(), key=lambda kv: kv[1]["start"])]
     sched.shift_calendar(events, ns)
     sched.legend([("My shift", "mine"), ("Request for you", "request"), ("Recommended", "recommended"),
@@ -124,6 +135,8 @@ def calendar_page(volunteer: dict) -> None:
         if s.get("required_skills"):
             details.append(f"Needs: {', '.join(s['required_skills'])}")
         st.caption(" · ".join(details))
+        for m in ctx.get(sid, {}).get("notices", [])[:1]:
+            st.info(m["body"], icon=":material/partly_cloudy_day:")
         shift_actions(volunteer, s, kinds[sid], ctx.get(sid, {}), "peek")
 
     sched.peek(ns, shifts.get(sched.peek_id(ns) or ""), body)
@@ -147,7 +160,19 @@ def task_page(volunteer: dict, shift_id: str) -> None:
 
     sched.page_title(s, _label(s, kind), kind)
     extra = [("auto_awesome", "Match with your bio", f"{c['score']:.0%}")] if "score" in c else []
+    if plan := s.get("weather_plan"):
+        extra.append(("partly_cloudy_day", "Weather plan", f"**{plan['title']}** · {plan['details']}"))
     sched.properties(s, extra)
+
+    if notices := c.get("notices"):
+        st.subheader("Update from your coordinator")
+        for m in notices:
+            with st.container(border=True):
+                st.write(m["body"])
+                st.caption(f"Sent {repo.to_local(m['sent_at']):%a %b %-d, %-I:%M %p}")
+        if any(m["status"] == "unread" for m in notices):
+            actions.mark_notices_read(volunteer["_id"], s["_id"])
+
     st.subheader("About")
     st.write(s["description"])
 

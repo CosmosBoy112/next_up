@@ -1,7 +1,7 @@
 """Agent tools: JSON schemas + implementations. Results are compact JSON strings.
 
-The agent's only write tools are propose_action and log_note. Every other tool
-is a read over core.repo.
+The agent's only write tools are propose_action, propose_weather_plan and log_note.
+Every other tool is a read over core.repo / core.weather.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from typing import Any, Callable
 from bson import ObjectId
 from bson.errors import InvalidId
 
-from core import db, repo
+from core import db, repo, weather
 from core.embeddings import embed
 
 MAX_CANDIDATES = 3
@@ -22,6 +22,9 @@ MAX_DRAFT_WORDS = 60
 FAIRNESS_PER_HOUR = 0.004  # 25h of recent work costs about 0.1 of match score
 HIGH_LOAD_HOURS = 15
 APPROVAL_KINDS = ("fill_vacancy", "coverage_invite", "custom_request")
+WEATHER_OPTIONS = ("move_indoors", "reschedule", "adjust", "cancel", "proceed")
+MAX_ALTERNATIVES = 3
+MAX_NOTICE_WORDS = 70
 
 
 @dataclass
@@ -34,6 +37,7 @@ class RunCtx:
     exclude_volunteer_ids: set[str] = field(default_factory=set)
     proposed_shift_ids: set[str] = field(default_factory=set)
     approval_ids: list[str] = field(default_factory=list)
+    weather: dict[str, dict] = field(default_factory=dict)  # shift_id -> get_weather result
     finished: bool = False
     finish_summary: str = ""
 
@@ -270,6 +274,85 @@ def propose_action(ctx: RunCtx, kind: str, shift_id: str, summary: str,
     return to_json({"ok": True, "approval_id": approval_id, "note": note})
 
 
+def get_weather_risks(ctx: RunCtx, days: int = 7) -> str:
+    try:
+        risky = weather.risky_shifts(int(days))
+    except weather.WeatherUnavailable as e:
+        raise ToolError(str(e))
+    if not risky:
+        return to_json({"risky_shifts": [], "note": "No weather-sensitive shift has a bad forecast."})
+    return to_json({"risky_shifts": [_shift_brief(s) | {"severity": w["severity"], "reasons": w["reasons"]}
+                                     for s, w in risky]})
+
+
+def get_weather(ctx: RunCtx, shift_id: str) -> str:
+    shift = _load_shift(shift_id)
+    try:
+        w = weather.shift_weather(shift)
+    except weather.WeatherUnavailable as e:
+        raise ToolError(str(e))
+    ctx.weather[str(shift["_id"])] = w
+    confirmed = repo.confirmed_count(shift["_id"])
+    return to_json(_shift_brief(shift) | {"description": shift["description"],
+                                          "confirmed_count": confirmed} | w)
+
+
+def get_weather_outlook(ctx: RunCtx, days: int = 7) -> str:
+    try:
+        days_out = weather.outlook(min(int(days), 14))
+    except weather.WeatherUnavailable as e:
+        raise ToolError(str(e))
+    indoor = sorted({s["location"] for s in repo.list_upcoming_shifts(28)
+                     if not weather.weather_sensitive(s)})
+    return to_json({"daytime_outlook": [{k: d[k] for k in ("date", "severity", "summary")} for d in days_out],
+                    "known_indoor_locations": indoor})
+
+
+def propose_weather_plan(ctx: RunCtx, shift_id: str, summary: str, alternatives: list[dict]) -> str:
+    shift = _load_shift(shift_id)
+    sid = str(shift["_id"])
+    w = ctx.weather.get(sid)
+    if w is None:
+        raise ToolError("call get_weather for this shift first")
+    if w["severity"] == "ok":
+        raise ToolError("the forecast for this shift is fine; no weather plan is needed")
+    if sid in ctx.proposed_shift_ids:
+        raise ToolError("you already proposed for this shift in this run; call finish if done")
+    if db.approvals().find_one({"shift_id": shift["_id"], "kind": "weather_alert", "status": "pending"}):
+        raise ToolError("a weather plan for this shift is already waiting for the coordinator")
+    if not isinstance(alternatives, list) or not 2 <= len(alternatives) <= MAX_ALTERNATIVES:
+        raise ToolError(f"alternatives must be a list of 2-{MAX_ALTERNATIVES} items")
+    options = []
+    for a in alternatives:
+        option = str(a.get("option", ""))
+        if option not in WEATHER_OPTIONS:
+            raise ToolError(f"option must be one of {WEATHER_OPTIONS}")
+        notice = str(a.get("notice_message", "")).strip()
+        if not notice:
+            raise ToolError(f"notice_message missing for option {option}")
+        if len(notice.split()) > MAX_NOTICE_WORDS:
+            raise ToolError(f"notice for {option} has {len(notice.split())} words; keep it under "
+                            f"{MAX_NOTICE_WORDS}")
+        options.append({"option": option, "title": str(a.get("title", option))[:80],
+                        "details": str(a.get("details", ""))[:300], "notice_message": notice})
+
+    doc = {
+        "kind": "weather_alert", "shift_id": shift["_id"],
+        "trigger": {"type": ctx.trigger_type, "ref_id": sid} | (
+            {"text": ctx.payload["text"]} if "text" in ctx.payload else {}),
+        "agent_run_id": ctx.run_id, "summary": str(summary)[:500],
+        # The forecast is copied from the tool result, not from the model.
+        "weather": {"severity": w["severity"], "reasons": w["reasons"], "forecast": w["forecast"]},
+        "alternatives": options, "candidates": [],
+        "status": "pending", "coordinator_note": "", "created_at": repo.now_utc(), "decided_at": None,
+    }
+    approval_id = str(db.approvals().insert_one(doc).inserted_id)
+    ctx.proposed_shift_ids.add(sid)
+    ctx.approval_ids.append(approval_id)
+    return to_json({"ok": True, "approval_id": approval_id,
+                    "note": "Queued for coordinator review. Nothing was sent."})
+
+
 def log_note(ctx: RunCtx, text: str) -> str:
     return "ok"  # the harness already records the call (and its text) in agent_log
 
@@ -326,6 +409,30 @@ TOOL_SCHEMAS: list[dict] = [
                              "description": "short concrete reasons"},
                  "draft_message": {"type": "string", "description": "under 60 words"}}}}},
         ["kind", "shift_id", "summary", "candidates"]),
+    _fn("get_weather_risks",
+        "Upcoming outdoor/driving shifts whose forecast is 'caution' or 'severe', with reasons.",
+        {"days": {"type": "integer", "description": "look-ahead window, default 7"}}, []),
+    _fn("get_weather", "Forecast for one shift's time window: condition, rain, wind, temperature, "
+        "severity (ok/caution/severe) and whether the shift is weather-sensitive.",
+        {"shift_id": _ID}, ["shift_id"]),
+    _fn("get_weather_outlook", "Daytime forecast per day (to find a better day to reschedule) and "
+        "known indoor locations (to move a shift indoors).",
+        {"days": {"type": "integer", "description": "default 7, max 14"}}, []),
+    _fn("propose_weather_plan",
+        "Queue a weather warning with 2-3 alternatives for the coordinator. Call get_weather for the "
+        "shift first. Each alternative has a notice to send the confirmed crew if chosen.",
+        {"shift_id": _ID,
+         "summary": {"type": "string", "description": "1-2 sentences: the risk and your recommendation"},
+         "alternatives": {"type": "array", "minItems": 2, "maxItems": MAX_ALTERNATIVES, "items": {
+             "type": "object", "additionalProperties": False,
+             "required": ["option", "title", "details", "notice_message"],
+             "properties": {
+                 "option": {"type": "string", "enum": list(WEATHER_OPTIONS)},
+                 "title": {"type": "string", "description": "short, e.g. 'Move to Grace Hall'"},
+                 "details": {"type": "string", "description": "what changes and why, 1-2 sentences"},
+                 "notice_message": {"type": "string",
+                                    "description": f"message to the confirmed crew, under {MAX_NOTICE_WORDS} words"}}}}},
+        ["shift_id", "summary", "alternatives"]),
     _fn("log_note", "Record a short note in the audit log.", {"text": {"type": "string"}}, ["text"]),
     _fn("finish", "End the run with a one-line summary.", {"summary": {"type": "string"}}, ["summary"]),
 ]
@@ -335,6 +442,8 @@ TOOLS: dict[str, Callable[..., str]] = {
     "find_candidates": find_candidates, "search_volunteers": search_volunteers,
     "search_shifts": search_shifts, "volunteer_history": volunteer_history,
     "propose_action": propose_action, "log_note": log_note, "finish": finish,
+    "get_weather_risks": get_weather_risks, "get_weather": get_weather,
+    "get_weather_outlook": get_weather_outlook, "propose_weather_plan": propose_weather_plan,
 }
 
 

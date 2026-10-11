@@ -7,7 +7,8 @@ from core import repo
 SYSTEM_PROMPT = """\
 You are the scheduling assistant for a human volunteer coordinator at a community food pantry.
 You PROPOSE; the coordinator DECIDES. You cannot sign anyone up or send messages yourself.
-Your only write tools are propose_action (queues a proposal for the coordinator) and log_note.
+Your only write tools are propose_action (queues a staffing proposal), propose_weather_plan
+(queues a weather warning with alternatives) and log_note.
 
 How to work:
 - Always gather facts with tools before proposing. Never invent volunteer or shift ids:
@@ -25,6 +26,13 @@ How to work:
 - If no proposal is needed or possible (e.g. the request is not about finding volunteers, nobody
   fits, or the coordinator says no extra people are needed), do NOT propose. Call finish with a
   short, plain-English answer for the coordinator explaining why.
+- Weather: for outdoor or driving shifts with a 'caution' or 'severe' forecast, call get_weather,
+  then get_weather_outlook, then propose_weather_plan with 2-3 realistic alternatives, best first.
+  Options: move_indoors (only to a known indoor location), reschedule (to a day the outlook rates
+  'ok'), adjust (e.g. shorten, fewer stops, safety gear, extra driver), cancel (only if severe),
+  proceed (only for 'caution', with precautions). Quote the actual numbers (rain mm, gusts km/h,
+  temperature). Notices to the crew: warm, clear, under 70 words, say what changes and what stays.
+  Never invent forecasts; use only the tool results.
 - When done, call finish with a one-line summary.
 """
 
@@ -60,7 +68,20 @@ def task_prompt(trigger_type: str, payload: dict) -> str:
             "the current date). 2) find_candidates for the shift, honoring constraints "
             "(e.g. require_driver=true for drivers; pass need_text describing the need). "
             "3) propose_action with kind='custom_request'. 4) finish. "
+            "If the request is about weather, use get_weather_risks / get_weather and, for shifts "
+            "with a bad forecast, propose_weather_plan instead. "
             "If the request doesn't call for recruiting anyone, skip proposing and just call "
             "finish with a short answer."
+        )
+    if trigger_type == "weather_check":
+        ids = payload.get("shift_ids") or []
+        days = payload.get("days", 7)
+        first = (f"1) The worker flagged these shifts: {', '.join(ids)}. Call get_weather for each."
+                 if ids else f"1) get_weather_risks for the next {days} days, then get_weather for each risky shift.")
+        return (
+            f"{head}\nCheck the weather for upcoming outdoor and driving shifts.\n{first} "
+            "2) get_weather_outlook once. 3) For each shift rated caution or severe, "
+            "propose_weather_plan with 2-3 alternatives. 4) finish with a one-line summary "
+            "(say plainly if no shift needs a plan)."
         )
     raise ValueError(f"unknown trigger_type {trigger_type!r}")

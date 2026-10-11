@@ -16,7 +16,7 @@ CALENDAR_DAYS = 28
 PERIODS = ["Week", "Month"]
 # kind -> (st.badge color, event background, event text, left accent bar). Pastel blocks
 # with a bold bar, after the reference calendar: sky = open, green = covered/yours,
-# purple = needs your decision, rose = recommended, gray = not for you.
+# purple = needs your decision, amber = weather alert, rose = recommended, gray = not for you.
 KINDS = {
     "open": ("blue", "#e4f3fb", "#1f6f9e", "#3aa0d8"),
     "filled": ("green", "#e7f5eb", "#3a7a4a", "#5aa469"),
@@ -24,6 +24,7 @@ KINDS = {
     "pending": ("violet", "#ece8fb", "#4c32b0", "#6c4fd8"),
     "request": ("violet", "#ece8fb", "#4c32b0", "#6c4fd8"),
     "recommended": ("red", "#fdecf0", "#b8405a", "#e86a7f"),
+    "weather": ("orange", "#fff4e2", "#94570a", "#f59e0b"),
     "muted": ("gray", "#f2f3f7", "#7b839a", "#c3c8d6"),
     "cancelled": ("gray", "#f5f6f9", "#a0a6b8", "#dde1ea"),
 }
@@ -152,7 +153,7 @@ def task_items(ns: str, groups: Groups, empty: str) -> None:
     page, active = current_page(ns)
     if not any(items for _, items in groups):
         st.caption(empty)
-    for title, items in groups:
+    for gi, (title, items) in enumerate(groups):
         if not items:
             continue
         st.caption(f"{title} · {len(items)}")
@@ -161,7 +162,7 @@ def task_items(ns: str, groups: Groups, empty: str) -> None:
             start = repo.to_local(s["start"])
             label = (f":{KINDS[kind][0]}-badge[{tag}] **{s['title']}**  \n"
                      f":gray[{start:%a %-m/%-d · %-I:%M %p}]")
-            if st.button(label, key=f"{ns}__task_{sid}", width="stretch",
+            if st.button(label, key=f"{ns}__task_{gi}_{sid}", width="stretch",  # a shift can be in 2 groups
                          type="secondary" if page == "task" and active == sid else "tertiary"):
                 go(ns, "task", sid)
                 st.rerun()
