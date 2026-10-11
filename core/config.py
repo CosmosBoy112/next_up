@@ -22,7 +22,7 @@ class ConfigError(RuntimeError):
 
 def require(name: str) -> str:
     value = os.getenv(name, "").strip()
-    if not value or value.startswith("<"):
+    if not value or "<" in value:  # unfilled .env.example placeholder
         raise ConfigError(
             f"Missing env var {name}. Copy .env.example to .env and fill it in."
         )

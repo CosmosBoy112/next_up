@@ -19,6 +19,8 @@ from core.embeddings import embed
 
 MAX_CANDIDATES = 3
 MAX_DRAFT_WORDS = 60
+FAIRNESS_PER_HOUR = 0.004  # 25h of recent work costs about 0.1 of match score
+HIGH_LOAD_HOURS = 15
 APPROVAL_KINDS = ("fill_vacancy", "coverage_invite", "custom_request")
 
 
@@ -28,6 +30,7 @@ class RunCtx:
     trigger_type: str
     payload: dict
     seen_volunteer_ids: set[str] = field(default_factory=set)
+    priorities: dict[str, float] = field(default_factory=dict)  # from find_candidates
     exclude_volunteer_ids: set[str] = field(default_factory=set)
     proposed_shift_ids: set[str] = field(default_factory=set)
     approval_ids: list[str] = field(default_factory=list)
@@ -124,15 +127,38 @@ def find_candidates(ctx: RunCtx, shift_id: str, need_text: str | None = None,
     taken = {str(s["volunteer_id"]) for s in db.signups().find(
         {"shift_id": shift["_id"], "status": "confirmed"}, {"volunteer_id": 1})}
     excluded = _excluded_for_shift(ctx, shift["_id"])
-    pool = [v for v in ranked
-            if str(v["_id"]) not in taken
-            and str(v["_id"]) not in excluded
-            and repo.is_available(v, shift)][: max(1, min(int(limit), 15))]
-    hours = repo.hours_28d([v["_id"] for v in pool])
+    eligible = [v for v in ranked
+                if str(v["_id"]) not in taken
+                and str(v["_id"]) not in excluded
+                and repo.is_available(v, shift)]
+    # Fairness: rank by fit minus a recent-workload penalty, then cut to `limit`,
+    # so a lightly-used volunteer with slightly lower fit isn't dropped or buried.
+    hours = repo.hours_28d([v["_id"] for v in eligible])
+    for v in eligible:
+        v["priority"] = v.get("score", 0.0) - FAIRNESS_PER_HOUR * hours[str(v["_id"])]
+    eligible.sort(key=lambda v: v["priority"], reverse=True)
+    pool = eligible[: max(1, min(int(limit), 15))]
     ctx.seen_volunteer_ids.update(str(v["_id"]) for v in pool)
-    return to_json({"shift": _shift_brief(shift),
-                    "note": "All candidates are available for the full shift window and not signed up.",
-                    "candidates": [_volunteer_brief(v, hours) for v in pool]})
+    ctx.priorities.update({str(v["_id"]): v["priority"] for v in pool})
+    min_hours = min((hours[str(v["_id"])] for v in pool), default=0.0)
+    return to_json({
+        "shift": _shift_brief(shift),
+        "note": ("All candidates are available for the full shift window and not signed up. "
+                 "Already sorted best-first by priority = match_score - "
+                 f"{FAIRNESS_PER_HOUR} * hours_28d (fit, adjusted for recent workload)."),
+        "candidates": [_volunteer_brief(v, hours) | {
+            "priority": round(v["priority"], 3),
+            "fairness_note": _fairness_note(hours[str(v["_id"])], min_hours),
+        } for v in pool],
+    })
+
+
+def _fairness_note(h: float, min_hours: float) -> str:
+    if h == min_hours:
+        return f"lightest recent load among candidates ({h:g}h in 28 days)"
+    if h >= HIGH_LOAD_HOURS:
+        return f"high recent load ({h:g}h in 28 days); prefer others if fit is similar"
+    return f"{h:g}h in 28 days"
 
 
 def search_volunteers(ctx: RunCtx, query: str, require_driver: bool = False, limit: int = 8) -> str:
@@ -210,6 +236,14 @@ def propose_action(ctx: RunCtx, kind: str, shift_id: str, summary: str,
                             f"{MAX_DRAFT_WORDS}")
         ids.append(vid)
 
+    # Final order is deterministic: the LLM picks who and explains why; the
+    # fairness-adjusted priority from find_candidates decides the ranking.
+    picked = list(zip(ids, candidates))
+    if all(vid in ctx.priorities for vid in ids):
+        picked.sort(key=lambda p: ctx.priorities[p[0]], reverse=True)
+    reordered = [vid for vid, _ in picked] != ids
+    ids, candidates = [vid for vid, _ in picked], [c for _, c in picked]
+
     hours = repo.hours_28d(ids)
     trigger = {"type": ctx.trigger_type,
                "ref_id": str(ctx.payload.get("signup_id") or ctx.payload.get("shift_id") or sid)}
@@ -230,8 +264,10 @@ def propose_action(ctx: RunCtx, kind: str, shift_id: str, summary: str,
     approval_id = str(db.approvals().insert_one(doc).inserted_id)
     ctx.proposed_shift_ids.add(sid)
     ctx.approval_ids.append(approval_id)
-    return to_json({"ok": True, "approval_id": approval_id,
-                    "note": "Queued for coordinator review. Nothing was sent."})
+    note = "Queued for coordinator review. Nothing was sent."
+    if reordered:
+        note += " Candidate order was adjusted to the fairness-weighted priority."
+    return to_json({"ok": True, "approval_id": approval_id, "note": note})
 
 
 def log_note(ctx: RunCtx, text: str) -> str:

@@ -24,6 +24,8 @@ from core import db, repo
 
 MAX_STEPS = 12
 LOG_CHARS = 1000
+NUDGE = ("Your last reply was empty. Call finish with a one-line answer for the coordinator "
+         "(or propose_action if a proposal is actually needed).")
 
 _llm: LLM | None = None
 
@@ -64,6 +66,7 @@ def run_agent(trigger_type: str, payload: dict, llm: LLM | None = None) -> str:
         return run_id
     log.log("thought", f"Run started ({trigger_type}): {json.dumps(payload, default=str)}")
 
+    nudged = False
     for _ in range(MAX_STEPS):
         try:
             turn = llm.chat(messages, TOOL_SCHEMAS)
@@ -71,7 +74,13 @@ def run_agent(trigger_type: str, payload: dict, llm: LLM | None = None) -> str:
             log.log("error", f"LLM call failed: {type(e).__name__}: {str(e)[:300]}")
             return run_id
         if not turn.tool_calls:
-            log.log("final", turn.text.strip() or "(no output)")
+            if not turn.text.strip() and not nudged:
+                # Thinking models sometimes stop with an empty reply; ask once for an answer.
+                nudged = True
+                messages.append(turn.as_message())
+                messages.append({"role": "user", "content": NUDGE})
+                continue
+            log.log("final", turn.text.strip() or "No proposal was needed for this request.")
             return run_id
         if turn.text.strip():
             log.log("thought", turn.text.strip())

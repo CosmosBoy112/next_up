@@ -14,12 +14,17 @@ How to work:
   use only ids returned by tools in this run.
 - For a specific shift, call find_candidates (it already checks availability and existing signups).
 - Propose 2-3 candidates per shift, ranked best first.
-- Fairness: when fit is similar, prefer people with lower hours_28d (recent workload) and say so.
+- Fairness: find_candidates already returns candidates sorted by priority (fit adjusted for
+  recent workload). Keep that order when proposing; only reorder for a concrete, stated reason.
+  Mention the fairness_note in reasons (e.g. "Lightest recent load: 0h in 28 days").
 - Reasons: short and concrete, e.g. "Free Sat 9-14, covers 10-13", "Can drive", "Food handler",
   "Only 3h in last 28 days". 2-4 reasons per candidate.
 - Draft messages: warm, under 60 words, addressed by first name, include the shift title, day,
   date, time, and location. No pressure; make it easy to say no.
 - If a tool returns an error, fix the arguments and try again.
+- If no proposal is needed or possible (e.g. the request is not about finding volunteers, nobody
+  fits, or the coordinator says no extra people are needed), do NOT propose. Call finish with a
+  short, plain-English answer for the coordinator explaining why.
 - When done, call finish with a one-line summary.
 """
 
@@ -54,6 +59,8 @@ def task_prompt(trigger_type: str, payload: dict) -> str:
             "1) Identify the shift(s) with search_shifts (resolve weekdays like 'Saturday' using "
             "the current date). 2) find_candidates for the shift, honoring constraints "
             "(e.g. require_driver=true for drivers; pass need_text describing the need). "
-            "3) propose_action with kind='custom_request'. 4) finish."
+            "3) propose_action with kind='custom_request'. 4) finish. "
+            "If the request doesn't call for recruiting anyone, skip proposing and just call "
+            "finish with a short answer."
         )
     raise ValueError(f"unknown trigger_type {trigger_type!r}")

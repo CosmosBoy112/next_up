@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import threading
-import time
 
 import streamlit as st
 
@@ -120,44 +118,23 @@ def render_run_log(run_id: str) -> None:
 # ---------- agent requests ----------
 
 def _run_with_status(trigger: str, payload: dict, label: str) -> None:
-    """Run the agent in a thread and stream its agent_log steps into st.status."""
-    started = repo.now_utc()
-    box: dict = {}
-
-    def target():
-        try:
-            box["run_id"] = run_agent(trigger, payload)
-        except Exception as e:  # noqa: BLE001 - surface in UI, keep app alive
-            box["error"] = f"{type(e).__name__}: {e}"
-
-    t = threading.Thread(target=target, daemon=True)
-    t.start()
-    shown = 0
-    with st.status(label, expanded=True) as status:
-        while t.is_alive() or shown == 0:
-            entries = repo.agent_log_since(trigger, started)
-            for e in entries[shown:]:
-                if e["kind"] in ("tool_call", "final", "error", "thought"):
-                    st.markdown(log_line(e))
-            shown = len(entries)
-            if not t.is_alive():
-                break
-            time.sleep(0.5)
-        t.join()
-        if "error" in box:
-            status.update(label="Agent failed", state="error")
-            st.toast(f"Agent error: {box['error']}", icon="⚠️")
-            return
-        run_id = box["run_id"]
-        errors = [e for e in get_run_log(run_id) if e["kind"] == "error"]
-        approvals = get_run_approvals(run_id)
-        if errors and not approvals:
-            status.update(label="Agent couldn't finish. See the log.", state="error")
-            st.toast(errors[-1]["content"][:150], icon="⚠️")
-        else:
-            status.update(label=f"Done: {len(approvals)} proposal(s) added to the queue",
-                          state="complete", expanded=False)
-            st.toast(f"{len(approvals)} new proposal(s) waiting for your approval", icon="✋")
+    """Run the agent behind a spinner and show only the outcome (steps stay in 🔍 Why?)."""
+    try:
+        with st.spinner(label):
+            run_id = run_agent(trigger, payload)
+    except Exception as e:  # noqa: BLE001 - surface in UI, keep app alive
+        st.error(f"Agent error: {type(e).__name__}: {e}")
+        return
+    log = get_run_log(run_id)
+    approvals = get_run_approvals(run_id)
+    errors = [e for e in log if e["kind"] == "error"]
+    if approvals:
+        st.success(f"{len(approvals)} new proposal(s) added to the approval queue.")
+    elif errors:
+        st.error(f"The agent couldn't finish: {errors[-1]['content'][:200]}")
+    else:
+        final = next((e["content"] for e in reversed(log) if e["kind"] == "final"), "")
+        st.info(final or "The agent didn't find anything to propose.")
 
 
 def ask_agent() -> None:

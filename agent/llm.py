@@ -33,10 +33,15 @@ class ToolCall:
 class AssistantTurn:
     text: str
     tool_calls: list[ToolCall] = field(default_factory=list)
+    # Thinking models (e.g. DeepSeek) require their reasoning to be sent back
+    # with the assistant turn in later requests.
+    reasoning: str | None = None
 
     def as_message(self) -> dict:
         """Assistant message to append to history (OpenAI format)."""
         msg: dict[str, Any] = {"role": "assistant", "content": self.text or ""}
+        if self.reasoning is not None:
+            msg["reasoning_content"] = self.reasoning
         if self.tool_calls:
             msg["tool_calls"] = [
                 {"id": tc.id, "type": "function",
@@ -83,13 +88,16 @@ class LLM:
         calls = [ToolCall(tc.id, tc.function.name, tc.function.arguments or "{}")
                  for tc in (msg.tool_calls or [])]
         text = msg.content or ""
+        reasoning = getattr(msg, "reasoning_content", None)
+        if reasoning is None:
+            reasoning = (getattr(msg, "model_extra", None) or {}).get("reasoning_content")
         if not calls:
             # Some models emit the JSON-mode shape as text even with tools available.
             parsed = _parse_json_reply(text)
             if parsed and "tool" in parsed:
                 calls = [self._synth_call(parsed)]
                 text = ""
-        return AssistantTurn(text=text, tool_calls=calls)
+        return AssistantTurn(text=text, tool_calls=calls, reasoning=reasoning)
 
     # ---- JSON fallback ----
 

@@ -1,0 +1,7 @@
+[server]
+# The source watcher walks every imported module (incl. transformers' lazy
+# vision modules) and floods the log with torchvision import errors.
+fileWatcherType = "none"
+
+[browser]
+gatherUsageStats = false
