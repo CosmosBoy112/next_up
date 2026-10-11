@@ -9,6 +9,7 @@ import streamlit as st
 
 ACCENT = "#5b5ff0"
 PAGE = "#f1f3f9"
+SIDEBAR_PX = 300  # Streamlit's default sidebar width
 
 # st.html strips inline <svg>, so the icon goes in as an <img> data URI.
 _LOGO_SVG = ("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' "
@@ -25,6 +26,26 @@ LOGO_HTML = f"""
 
 def logo() -> None:
     st.html(LOGO_HTML)
+
+
+COORDINATOR = "Alice"
+
+
+def _data_uri(svg: str) -> str:
+    return "data:image/svg+xml;utf8," + svg.replace("<", "%3C").replace(">", "%3E").replace("#", "%23")
+
+
+def initial_avatar(name: str, bg: str = "#fde3d6", fg: str = "#d2603a") -> str:
+    """A rounded square with the person's initial, as an image for st.chat_message."""
+    return _data_uri(f"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'>"
+                     f"<rect width='32' height='32' rx='8' fill='{bg}'/>"
+                     f"<text x='16' y='21.5' text-anchor='middle' font-family='Nunito Sans,Arial,sans-serif' "
+                     f"font-size='15' font-weight='700' fill='{fg}'>{name[:1].upper()}</text></svg>")
+
+
+def account_avatar(name: str) -> None:
+    """The initial in a circle at the start of the account switcher."""
+    st.html(f"""<style>.st-key-account button::before {{ content: "{name[:1].upper()}"; }}</style>""")
 
 
 def inject_css() -> None:
@@ -104,10 +125,23 @@ def inject_css() -> None:
 
 /* Account switcher pinned to the bottom of the sidebar */
 .st-key-account {{ position: sticky; bottom: 10px; margin-top: 1rem; z-index: 5; border-radius: 18px; }}
-.st-key-account button {{ padding: 8px 10px; }}
+.st-key-account button {{ padding: 8px 10px; gap: 12px; }}
+.st-key-account button::before {{
+  flex: none; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--vo-accent-soft); color: var(--vo-accent); font-weight: 800; font-size: .95rem;
+}}
+.st-key-account button [data-testid="stIconMaterial"] {{ display: none; }}
 .st-key-account [data-testid="stMarkdownContainer"] p {{ line-height: 1.25; }}
 
 /* ---- Floating assistant ---- */
+/* The chat is centered in the main area, beside the sidebar (when it's open and not overlaying),
+   leaving room for the round button on the right. */
+:root {{ --vo-side: 0px; }}
+@media (min-width: 768px) {{
+  .stApp:has([data-testid="stSidebar"][aria-expanded="true"]) {{ --vo-side: {SIDEBAR_PX}px; }}
+}}
+.stApp {{ --vo-chat-x: calc(var(--vo-side) + (100vw - var(--vo-side)) / 2);
+          --vo-chat-w: min(760px, calc(100vw - var(--vo-side) - 190px)); }}
 .st-key-fab {{ position: fixed; right: 28px; bottom: 28px; z-index: 1003; width: auto !important; }}
 .st-key-fab button {{
   width: 58px; height: 58px; min-height: 58px; border-radius: 50% !important; padding: 0;
@@ -119,8 +153,8 @@ def inject_css() -> None:
 .st-key-fab [data-testid="stIconMaterial"] {{ font-size: 1.7rem; }}
 
 .st-key-chatbar {{
-  position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 1002;
-  width: min(760px, calc(100vw - 200px)); padding: 6px 8px 6px 22px; gap: .5rem;
+  position: fixed; left: var(--vo-chat-x); bottom: 28px; transform: translateX(-50%); z-index: 1002;
+  width: var(--vo-chat-w); padding: 6px 8px 6px 22px; gap: .5rem;
   border-radius: 999px; box-shadow: var(--vo-shadow-lg); animation: vo-rise .28s ease-out;
 }}
 .st-key-chatbar [data-testid="stChatInput"], .st-key-chatbar [data-testid="stChatInput"] > div {{
@@ -130,17 +164,16 @@ def inject_css() -> None:
 .st-key-chatbar [data-testid="stChatInputSubmitButton"] {{
   width: 46px; height: 46px; border-radius: 14px; color: #fff !important; background: var(--vo-accent) !important;
 }}
+.st-key-chatbar [data-testid="stChatInputSubmitButton"]:disabled {{ opacity: 1; }}
 .st-key-chatbar [data-testid="stChatInputSubmitButton"] svg {{ fill: #fff; color: #fff; }}
 .st-key-chat_spark {{ color: var(--vo-accent); width: auto !important; }}
 .st-key-chat_spark [data-testid="stIconMaterial"] {{ font-size: 1.6rem; }}
-/* The conversation toggle sits inside the pill, just left of the send button. */
-.st-key-chat_panel_btn {{ position: absolute; right: 84px; top: 50%; transform: translateY(-50%);
-                          z-index: 2; width: auto !important; }}
-.st-key-chat_panel_btn button {{ color: var(--vo-muted); }}
+.st-key-chatpanel [data-testid="stChatMessage"] {{ background: transparent; padding: .35rem 0; gap: .8rem; }}
+.st-key-chatpanel [data-testid="stChatMessage"] > div:first-child [data-testid="stIconMaterial"] {{ color: var(--vo-accent); }}
 
 .st-key-chatpanel {{
-  position: fixed; left: 50%; bottom: 118px; transform: translateX(-50%); z-index: 1002;
-  width: min(760px, calc(100vw - 200px)); max-height: 58vh; overflow-y: auto; padding: 18px 22px;
+  position: fixed; left: var(--vo-chat-x); bottom: 118px; transform: translateX(-50%); z-index: 1002;
+  width: var(--vo-chat-w); max-height: 58vh; overflow-y: auto; padding: 18px 22px;
   border-radius: 28px; box-shadow: var(--vo-shadow-lg); animation: vo-rise .28s ease-out;
 }}
 

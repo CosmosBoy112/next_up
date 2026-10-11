@@ -90,6 +90,13 @@ def weather_scan(reason: str = "scheduled") -> None:
         log(f"[weather] {e}")
         return
     demo = weather.get_demo()
+    if not demo.get("enabled"):  # plans made from a simulated forecast no longer apply
+        stale = db.approvals().update_many(
+            {"kind": "weather_alert", "status": "pending", "weather.forecast.source": "demo"},
+            {"$set": {"status": "rejected", "decided_at": repo.now_utc(),
+                      "coordinator_note": "Simulated weather turned off; replaced by the live forecast."}})
+        if stale.modified_count:
+            log(f"[weather] cleared {stale.modified_count} simulated alert(s)")
     stamp = demo["updated_at"].isoformat() if demo.get("enabled") and demo.get("updated_at") else "live"
     today = f"{repo.to_local(repo.now_utc()):%Y-%m-%d}"
     fresh = []

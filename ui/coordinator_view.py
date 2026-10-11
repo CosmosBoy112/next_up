@@ -18,6 +18,7 @@ NS = "coord"
 SHIFT_REF_RE = re.compile(r"\s*\[shift_id=\w+\]$")
 GREETING = ("Hi! Ask me to find volunteers for a shift, check the weather for outdoor shifts, "
             "or run a coverage scan. My proposals show up on the calendar for you to approve.")
+AVATARS = {"assistant": ":material/auto_awesome:", "user": floating.initial_avatar(floating.COORDINATOR)}
 
 
 def _load(period: str) -> tuple[list[dict], dict, dict]:
@@ -300,15 +301,24 @@ def render_run_log(run_id: str) -> None:
 
 # ---------- agent chat panel (side) ----------
 
+def _toggle(key: str) -> None:
+    st.session_state[key] = not st.session_state.get(key, False)
+
+
+def _queue(trigger: str, payload: dict, shown: str) -> None:
+    st.session_state["agent_request"] = (trigger, payload, shown)
+
+
+@st.fragment
 def assistant() -> None:
     """Floating assistant: a round button bottom-right opens a pill chat bar; the conversation
-    shows in a panel above it."""
+    shows in a panel above it. A fragment, so opening/closing it doesn't rerun the page; buttons
+    flip state in on_click callbacks (before the rerun) instead of calling st.rerun()."""
     is_open = st.session_state.get("chat_open", False)
     with st.container(key="fab"):
-        if st.button("", icon=":material/close:" if is_open else ":material/auto_awesome:",
-                     key="fab_btn", help="Close assistant" if is_open else "Ask the assistant"):
-            st.session_state["chat_open"] = not is_open
-            st.rerun()
+        st.button("", icon=":material/close:" if is_open else ":material/auto_awesome:", key="fab_btn",
+                  help="Close assistant" if is_open else "Ask the assistant",
+                  on_click=_toggle, args=("chat_open",))
     if not is_open:
         return
 
@@ -317,38 +327,29 @@ def assistant() -> None:
         with st.container(key="chat_spark", width="content"):
             st.markdown(":material/auto_awesome:")
         prompt = st.chat_input("Ask the assistant to find volunteers…", key="chat_prompt")
-        if st.button("", icon=":material/forum:", type="tertiary", key="chat_panel_btn",
-                     help="Show conversation"):
-            st.session_state["chat_panel"] = not st.session_state.get("chat_panel", False)
 
     req = st.session_state.pop("agent_request", None)
     if prompt:
         req = ("custom_request", {"text": prompt}, prompt)
-    if req:
-        st.session_state["chat_panel"] = True
-    if not st.session_state.get("chat_panel"):
-        return
 
     with st.container(key="chatpanel"):
         with st.container(horizontal=True, vertical_alignment="center", horizontal_alignment="distribute"):
             st.markdown("**Assistant**", width="content")
             with st.container(horizontal=True, width="content"):
-                if st.button("Weather check", icon=":material/partly_cloudy_day:", type="tertiary",
-                             key="chat_weather"):
-                    st.session_state["agent_request"] = ("weather_check", {"days": 7},
-                                                         "Check the weather for outdoor shifts this week")
-                    st.rerun()
-                if st.button("Coverage scan", icon=":material/radar:", type="tertiary", key="chat_scan"):
-                    st.session_state["agent_request"] = ("coverage_scan", {"days": 7},
-                                                         "Run a coverage scan for the next 7 days")
-                    st.rerun()
+                st.button("Weather check", icon=":material/partly_cloudy_day:", type="tertiary",
+                          key="chat_weather", on_click=_queue,
+                          args=("weather_check", {"days": 7}, "Check the weather for outdoor shifts this week"))
+                st.button("Coverage scan", icon=":material/radar:", type="tertiary", key="chat_scan",
+                          on_click=_queue,
+                          args=("coverage_scan", {"days": 7}, "Run a coverage scan for the next 7 days"))
         for m in history:
-            st.chat_message(m["role"]).markdown(m["content"])
+            st.chat_message(m["role"], avatar=AVATARS[m["role"]]).markdown(m["content"])
         if req:
             trigger, payload, shown = req
-            st.chat_message("user").markdown(shown)
-            with st.chat_message("assistant"):
+            st.chat_message("user", avatar=AVATARS["user"]).markdown(shown)
+            with st.chat_message("assistant", avatar=AVATARS["assistant"]):
                 reply = _run_with_status(trigger, payload)
+                st.markdown(reply)
             history += [{"role": "user", "content": shown}, {"role": "assistant", "content": reply}]
         with st.expander("Activity log"):
             activity_feed()

@@ -36,9 +36,9 @@ CALENDAR_OPTIONS = {
               "dayGridMonth": {"displayEventTime": False, "dayHeaderFormat": {"weekday": "short"}}},
     "headerToolbar": {"left": "prev,next title", "center": "", "right": "today"},
     "buttonText": {"today": "Today"},
-    "slotMinTime": "07:00:00", "slotMaxTime": "21:00:00", "slotLabelFormat": _HOUR_24,
+    "slotMinTime": "08:00:00", "slotMaxTime": "20:00:00", "slotLabelFormat": _HOUR_24,
     "eventTimeFormat": _HOUR_24, "allDaySlot": False, "nowIndicator": True,
-    "contentHeight": 660, "eventDisplay": "block",
+    "contentHeight": "auto", "eventDisplay": "block",
 }
 # The component's own theme styles win without !important. The font is loaded again here
 # because the calendar renders in its own iframe.
@@ -46,11 +46,11 @@ CALENDAR_CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@400;600;700;800&display=swap');
 .fc { font-family: 'Nunito Sans', sans-serif; color: #1f2547; }
 .fc .fc-toolbar.fc-header-toolbar { margin-bottom: 1.1rem; }
-.fc .fc-toolbar-chunk:first-child { display: flex; align-items: center; gap: .25rem; }
+.fc .fc-toolbar-chunk:first-child { display: flex; align-items: center; gap: 0; }
 .fc-toolbar-title { font-size: 1.55rem !important; font-weight: 800; letter-spacing: -.02em; margin-left: .4rem !important; }
 .fc .fc-prev-button, .fc .fc-next-button {
     background: transparent !important; border: none !important; box-shadow: none !important;
-    color: #1f2547 !important; font-size: 1.15rem; padding: .2rem .35rem !important; }
+    color: #1f2547 !important; font-size: .8rem; padding: .2rem .05rem !important; }
 .fc .fc-prev-button:hover, .fc .fc-next-button:hover { color: #5b5ff0 !important; }
 .fc .fc-today-button {
     background: #f1f3f9 !important; color: #1f2547 !important; border: none !important;
@@ -67,7 +67,7 @@ CALENDAR_CSS = """
 .fc .fc-day-today { background: transparent !important; }
 .fc .fc-daygrid-day.fc-day-today .fc-daygrid-day-number {
     background: #5b5ff0; color: #fff; border-radius: 999px; min-width: 1.8em; text-align: center; }
-.fc .fc-timegrid-slot { height: 2.3em; }
+.fc .fc-timegrid-slot { height: 1.45em; }
 .fc .fc-timegrid-slot-minor { border-top-style: none !important; }
 .fc .fc-timegrid-slot-label-cushion { color: #8a90a8; font-size: .8rem; font-weight: 600; }
 .fc .fc-daygrid-day-number { color: #4b5270; font-weight: 600; font-size: .85rem; }

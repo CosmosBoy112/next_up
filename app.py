@@ -14,7 +14,7 @@ from core.config import ConfigError  # noqa: E402
 from core.embeddings import get_model  # noqa: E402
 from ui import coordinator_view, respond_view, volunteer_view  # noqa: E402
 from ui.common import flash, show_flash  # noqa: E402
-from ui.floating import inject_css, logo  # noqa: E402
+from ui.floating import COORDINATOR, account_avatar, inject_css, logo  # noqa: E402
 from scripts.seed import ORG  # noqa: E402
 
 
@@ -82,10 +82,11 @@ def current_identity(volunteers: list[dict]) -> tuple[str, dict | None]:
 def account_switcher(view: str, volunteer: dict | None, volunteers: list[dict]) -> None:
     """Bottom of the sidebar, like Slack/Notion: the current user; click to switch (demo has no login)."""
     if view == "Volunteer" and volunteer is not None:
-        label, icon = f"**{volunteer['name']}**  \n:gray[Volunteer · {ORG}]", ":material/account_circle:"
+        name, label = volunteer["name"], f"**{volunteer['name']}**  \n:gray[Volunteer · {ORG}]"
     else:
-        label, icon = f"**Coordinator**  \n:gray[{ORG}]", ":material/admin_panel_settings:"
-    with st.container(key="account"), st.popover(label, icon=icon, type="tertiary", width="stretch"):
+        name, label = COORDINATOR, f"**{COORDINATOR} · Coordinator**  \n:gray[{ORG}]"
+    account_avatar(name)
+    with st.container(key="account"), st.popover(label, type="tertiary", width="stretch"):
         st.radio("View as", ["Coordinator", "Volunteer"], key="view", horizontal=True)
         if st.session_state.get("view") == "Volunteer" and volunteers:
             names = [v["name"] for v in volunteers]
