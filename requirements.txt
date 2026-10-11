@@ -1,0 +1,5 @@
+streamlit>=1.37
+pymongo>=4.7
+openai>=1.40
+sentence-transformers>=3.0
+python-dotenv>=1.0
