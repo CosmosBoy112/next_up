@@ -1,3 +1,18 @@
 [client]
-# "viewer" hides the Deploy button and developer menu items.
-toolbarMode = "viewer"
+# "minimal" drops the Deploy button and Streamlit's own menu; the app has its own menu.
+toolbarMode = "minimal"
+
+[theme]
+base = "light"
+primaryColor = "#5b5ff0"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f3f4fa"
+textColor = "#1f2547"
+borderColor = "#e4e7f2"
+baseRadius = "12px"
+showSidebarBorder = false
+font = "Nunito Sans:https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@400;600;700;800&display=swap"
+
+[theme.sidebar]
+backgroundColor = "#f1f3f9"
+secondaryBackgroundColor = "#ffffff"

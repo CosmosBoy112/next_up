@@ -291,6 +291,25 @@ def shift_crews(shift_ids: list[ObjectId]) -> dict[ObjectId, list[str]]:
     return {r["_id"]: r["names"] for r in db.signups().aggregate(pipeline)}
 
 
+def shift_roster(shift_id: str | ObjectId) -> list[dict]:
+    """Confirmed signups for a shift, each with its volunteer attached (sorted by name)."""
+    rows = list(db.signups().aggregate([
+        {"$match": {"shift_id": oid(shift_id), "status": "confirmed"}},
+        {"$lookup": {"from": "volunteers", "localField": "volunteer_id", "foreignField": "_id",
+                     "pipeline": [{"$project": {"bio_embedding": 0, "availability": 0}}],
+                     "as": "volunteer"}},
+        {"$unwind": "$volunteer"},
+    ]))
+    return sorted(rows, key=lambda r: r["volunteer"]["name"])
+
+
+def shift_requests(shift_id: str | ObjectId) -> list[dict]:
+    """Requests sent for a shift (newest first), each with the recipient's name."""
+    msgs = list(db.messages().find({"shift_id": oid(shift_id)}).sort("sent_at", -1))
+    names = volunteer_names([m["to_volunteer_id"] for m in msgs])
+    return [m | {"name": names.get(m["to_volunteer_id"], "Unknown")} for m in msgs]
+
+
 def dashboard_metrics() -> dict:
     """Open slots / fill rate (next 7 days), pending approvals, agent runs today."""
     week = [s for s in shift_board(7) if s["status"] != "cancelled"]

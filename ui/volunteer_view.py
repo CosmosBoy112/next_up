@@ -1,5 +1,5 @@
-"""Volunteer view: same layout as the coordinator. Calendar of shifts in the main column,
-requests and recommendations in the side panel, profile editing in a dialog."""
+"""Volunteer view: same structure as the coordinator. Calendar page and per-shift pages,
+a sidebar with requests / my shifts / recommendations, profile editing in a dialog."""
 
 from __future__ import annotations
 
@@ -11,22 +11,13 @@ from core import actions, repo
 from core.repo import WEEKDAYS
 from scripts.seed import ORG, SKILLS
 from ui import schedule as sched
-from ui.common import STATUS_CHIPS, flash, when
+from ui.common import flash
 
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
-MSG_KINDS = {"sent": "request", "accepted": "mine", "declined": "muted", "withdrawn": "muted"}
 
 
-def render(volunteer: dict) -> None:
-    main, side = st.columns([5, 2], gap="large")
-    with main:
-        schedule(volunteer)
-    with side:
-        side_panel(volunteer)
-
-
-def _cal_key(volunteer: dict) -> str:
-    return f"vol_calendar_{volunteer['_id']}"
+def _ns(volunteer: dict) -> str:
+    return f"vol_{volunteer['_id']}"
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -39,12 +30,10 @@ def _refresh_recommendations() -> None:
     _recommended.clear()
 
 
-# ---------- schedule (main) ----------
-
-def _classify(volunteer: dict) -> tuple[dict[str, dict], dict[str, str], dict[str, dict]]:
+def _classify(volunteer: dict, period: str) -> tuple[dict[str, dict], dict[str, str], dict[str, dict]]:
     """shift id -> shift, shift id -> kind, shift id -> context (signup / message / score)."""
     vid = volunteer["_id"]
-    board = {str(s["_id"]): s for s in repo.shift_board(sched.CALENDAR_DAYS)
+    board = {str(s["_id"]): s for s in repo.shift_board(sched.fetch_days(period))
              if s["status"] != "cancelled"}
     shifts, kinds, ctx = {}, {}, {}
 
@@ -69,78 +58,140 @@ def _classify(volunteer: dict) -> tuple[dict[str, dict], dict[str, str], dict[st
     return shifts, kinds, ctx
 
 
-@st.fragment(run_every=3)
-def schedule(volunteer: dict) -> None:
-    st.title(f"{volunteer['name'].split()[0]}'s schedule")
-    st.caption(f"{volunteer['org']} volunteer · {', '.join(volunteer.get('skills', [])) or 'no skills listed'}"
-               + (" · can drive" if volunteer.get("can_drive") else ""))
+LABELS = {"mine": "you're signed up", "request": "request for you", "recommended": "recommended",
+          "open": "open", "muted": "outside your availability"}
 
-    shifts, kinds, ctx = _classify(volunteer)
-    count = lambda k: sum(1 for v in kinds.values() if v == k)  # noqa: E731
-    c = st.columns(4)
-    c[0].metric("My upcoming shifts", count("mine"))
-    c[1].metric("Hours completed", f"{repo.completed_hours(volunteer['_id']):g} h")
-    c[2].metric("Requests for you", count("request"))
-    c[3].metric("Open shifts that fit you", count("open") + count("recommended"))
+
+def _label(s: dict, kind: str) -> str:
+    return f"{s['open_slots']} spot(s) left" if kind == "open" else LABELS[kind]
+
+
+# ---------- sidebar ----------
+
+def sidebar(volunteer: dict) -> None:
+    with st.container(key="side_card"):
+        sched.sidebar_nav(_ns(volunteer))
+        task_list(volunteer)
+        st.divider()
+        if st.button("Edit profile", icon=":material/manage_accounts:", type="tertiary", key="edit_profile"):
+            profile_dialog(volunteer)
+
+
+@st.fragment(run_every=3)
+def task_list(volunteer: dict) -> None:
+    ns = _ns(volunteer)
+    period = sched.period(ns)
+    shifts, kinds, _ = _classify(volunteer, period)
+    groups = {"request": [], "mine": [], "recommended": []}
+    tags = {"request": "request", "mine": "signed up", "recommended": "for you"}
+    for sid, s in sorted(shifts.items(), key=lambda kv: kv[1]["start"]):
+        if kinds[sid] in groups and sched.in_period(s, period):
+            groups[kinds[sid]].append((s, kinds[sid], tags[kinds[sid]]))
+    sched.task_items(ns, [("Requests for you", groups["request"]), ("My shifts", groups["mine"]),
+                          ("Recommended", groups["recommended"])],
+                     "Nothing scheduled in this period. Open shifts are on the calendar.")
+
+
+# ---------- pages ----------
+
+def render(volunteer: dict) -> None:
+    page, shift_id = sched.current_page(_ns(volunteer))
+    if page == "task" and shift_id:
+        task_page(volunteer, shift_id)
+    else:
+        calendar_page(volunteer)
+
+
+@st.fragment(run_every=3)
+def calendar_page(volunteer: dict) -> None:
+    ns = _ns(volunteer)
+    shifts, kinds, ctx = _classify(volunteer, sched.period(ns))
+    st.caption(f"{volunteer['name']} · {', '.join(volunteer.get('skills', [])) or 'no skills listed'}"
+               + (" · can drive" if volunteer.get("can_drive") else ""))
 
     titles = {"mine": "{t}", "request": "Request: {t}", "recommended": "{t} · for you",
               "open": "{t}", "muted": "{t}"}
     events = [sched.event(s, kinds[sid], titles[kinds[sid]].format(t=s["title"]))
               for sid, s in sorted(shifts.items(), key=lambda kv: kv[1]["start"])]
-    key = _cal_key(volunteer)
-    selected_id = sched.shift_calendar(events, key)
+    sched.shift_calendar(events, ns)
     sched.legend([("My shift", "mine"), ("Request for you", "request"), ("Recommended", "recommended"),
                   ("Open, fits you", "open"), ("Outside your availability", "muted")])
 
-    if selected_id not in shifts:
-        st.caption("Click a shift on the calendar to see details and sign up.")
-        return
-    s = shifts[selected_id]
-    sched.day_heading(s)
-    shift_card(volunteer, s, kinds[selected_id], ctx.get(selected_id, {}))
-
-
-def shift_card(volunteer: dict, s: dict, kind: str, ctx: dict) -> None:
-    sid = str(s["_id"])
-    labels = {"mine": "you're signed up", "request": "request for you", "recommended": "recommended",
-              "open": f"{s['open_slots']} spot(s) left", "muted": "outside your availability"}
-    with st.container(border=True):
-        sched.shift_header(s, labels[kind], kind)
+    def body(s: dict) -> None:
+        sid = str(s["_id"])
+        sched.shift_header(s, _label(s, kinds[sid]), kinds[sid])
         details = [s["description"]]
         if s.get("required_skills"):
             details.append(f"Needs: {', '.join(s['required_skills'])}")
-        if "score" in ctx:
-            details.append(f"Match with your bio: {ctx['score']:.0%}")
         st.caption(" · ".join(details))
+        shift_actions(volunteer, s, kinds[sid], ctx.get(sid, {}), "peek")
 
-        if kind == "request":
-            m = ctx["message"]
-            with st.container(border=True):
-                st.write(m["body"])
-                st.caption(f"Suggested by the coordinator's assistant, approved by {ORG} coordinator")
-                _respond_buttons(m, "card")
-        elif kind == "mine":
-            signup = ctx["signup"]
-            if signup.get("source") == "agent":
-                st.caption("Joined via coordinator request")
-            with st.popover("Cancel this shift"):
-                st.write("Cancel this shift? Your coordinator will be notified.")
-                if st.button("Yes, cancel", key=f"cancel_{signup['_id']}", type="primary"):
-                    try:
-                        repo.cancel_signup(signup["_id"])
-                        flash("Shift cancelled. Thanks for letting us know.")
-                    except ValueError as e:
-                        flash(str(e))
-                    _refresh_recommendations()
-                    st.rerun()
-        elif st.button("Sign up", key=f"signup_{sid}", type="primary"):
-            try:
-                repo.signup(volunteer["_id"], s["_id"], source="self")
-                flash(f"Signed up for {s['title']}!")
-            except ValueError as e:
-                flash(str(e))
-            _refresh_recommendations()
-            st.rerun()
+    sched.peek(ns, shifts.get(sched.peek_id(ns) or ""), body)
+
+
+@st.fragment(run_every=3)
+def task_page(volunteer: dict, shift_id: str) -> None:
+    ns = _ns(volunteer)
+    sched.back_link(ns)
+    shifts, kinds, ctx = _classify(volunteer, sched.period(ns))
+    s = shifts.get(shift_id)
+    kind = kinds.get(shift_id, "muted")
+    if s is None:  # e.g. the shift filled up and you're not on it
+        shift = repo.get_shift(shift_id)
+        if shift is None:
+            st.info("This shift no longer exists.")
+            return
+        confirmed = repo.confirmed_count(shift["_id"])
+        s = shift | {"confirmed_count": confirmed, "open_slots": max(0, shift["required_count"] - confirmed)}
+    c = ctx.get(shift_id, {})
+
+    sched.page_title(s, _label(s, kind), kind)
+    extra = [("auto_awesome", "Match with your bio", f"{c['score']:.0%}")] if "score" in c else []
+    sched.properties(s, extra)
+    st.subheader("About")
+    st.write(s["description"])
+
+    if kind == "request":
+        st.subheader("Request from your coordinator")
+        with st.container(border=True):
+            st.write(c["message"]["body"])
+            st.caption(f"Suggested by the coordinator's assistant, approved by {ORG} coordinator")
+            shift_actions(volunteer, s, kind, c, "page")
+    else:
+        shift_actions(volunteer, s, kind, c, "page")
+
+    st.subheader("Who's going")
+    crew = repo.shift_crews([s["_id"]]).get(s["_id"], [])
+    st.markdown(" ".join(f":gray-badge[{n}]" for n in crew) if crew else ":gray[Nobody yet. Be the first!]")
+
+
+def shift_actions(volunteer: dict, s: dict, kind: str, ctx: dict, where: str) -> None:
+    """The one thing a volunteer can do with this shift right now."""
+    sid = str(s["_id"])
+    if kind == "request":
+        _respond_buttons(ctx["message"], where)
+    elif kind == "mine":
+        signup = ctx["signup"]
+        if signup.get("source") == "agent":
+            st.caption("Joined via coordinator request")
+        with st.popover("Cancel this shift"):
+            st.write("Cancel this shift? Your coordinator will be notified.")
+            if st.button("Yes, cancel", key=f"cancel_{where}_{signup['_id']}", type="primary"):
+                try:
+                    repo.cancel_signup(signup["_id"])
+                    flash("Shift cancelled. Thanks for letting us know.")
+                except ValueError as e:
+                    flash(str(e))
+                _refresh_recommendations()
+                st.rerun()
+    elif s["open_slots"] > 0 and st.button("Sign up", key=f"signup_{where}_{sid}", type="primary"):
+        try:
+            repo.signup(volunteer["_id"], s["_id"], source="self")
+            flash(f"Signed up for {s['title']}!")
+        except ValueError as e:
+            flash(str(e))
+        _refresh_recommendations()
+        st.rerun()
 
 
 def _respond_buttons(m: dict, where: str) -> None:
@@ -153,55 +204,6 @@ def _respond_buttons(m: dict, where: str) -> None:
     if b[1].button("Decline", key=f"dec_{where}_{m['_id']}", width="stretch"):
         res = actions.decline_message(m["_id"])
         flash(res.message)
-        st.rerun()
-
-
-# ---------- side panel ----------
-
-def side_panel(volunteer: dict) -> None:
-    head = st.columns([3, 2], vertical_alignment="center")
-    head[0].subheader("Inbox")
-    if head[1].button("Edit profile", icon=":material/person:", width="stretch"):
-        profile_dialog(volunteer)
-    inbox_panel(volunteer)
-    st.subheader("Recommended for you")
-    recommended_panel(volunteer)
-
-
-@st.fragment(run_every=3)
-def inbox_panel(volunteer: dict) -> None:
-    msgs = repo.inbox(volunteer["_id"])
-    with st.container(height=420, border=True):
-        if not msgs:
-            st.caption("No requests right now. New requests from your coordinator show up here live.")
-        for m in msgs:
-            shift = m["shift"]
-            if shift is None:
-                continue
-            with st.container(border=True):
-                st.markdown(f"**{shift['title']}**  \n:gray[{when(shift['start'], shift['end'])}]")
-                sched.badge(STATUS_CHIPS.get(m["status"], m["status"]), MSG_KINDS.get(m["status"], "muted"))
-                if m["status"] == "sent":
-                    st.caption(m["body"])
-                    _respond_buttons(m, "inbox")
-                    _show_button(volunteer, shift, "inbox")
-
-
-def recommended_panel(volunteer: dict) -> None:
-    recs = _recommended(str(volunteer["_id"]))
-    if not recs:
-        st.caption("No matching open shifts in your availability right now.")
-    for s in recs:
-        with st.container(border=True):
-            st.markdown(f"**{s['title']}**  \n:gray[{when(s['start'], s['end'])} · "
-                        f"match {s.get('score', 0):.0%}]")
-            _show_button(volunteer, s, "rec")
-
-
-def _show_button(volunteer: dict, shift: dict, where: str) -> None:
-    if st.button("Show on calendar", key=f"show_{where}_{shift['_id']}", width="stretch",
-                 icon=":material/calendar_month:"):
-        sched.select(_cal_key(volunteer), str(shift["_id"]))
         st.rerun()
 
 
