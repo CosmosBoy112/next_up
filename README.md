@@ -1,10 +1,12 @@
-# VolunteerOps
+# NextUp
 
 **An AI agent for volunteer coordinators. The agent does the work; the coordinator stays in charge.**
 
-<!-- TODO: demo GIF / screenshot -->
+[![NextUp demo video](docs/demo/thumbnail.jpg)](docs/demo/nextup-demo.mp4)
 
-When a volunteer cancels, VolunteerOps notices right away through a MongoDB Change Stream. The agent finds the best available replacements with Atlas Vector Search, writes a short, friendly request for each one, and puts the proposal in front of the coordinator. Nothing reaches a volunteer until the coordinator clicks **Approve**.
+▶ **[Watch the demo (1:42, narrated)](docs/demo/nextup-demo.mp4)**. The video is built with Remotion; its source is in [`my-video/`](my-video/README.md).
+
+When a volunteer cancels, NextUp notices right away through a MongoDB Change Stream. The agent finds the best available replacements with Atlas Vector Search, writes a short, friendly request for each one, and puts the proposal in front of the coordinator. Nothing reaches a volunteer until the coordinator clicks **Approve**.
 
 ---
 
@@ -33,7 +35,7 @@ flowchart LR
 1. **Vacancy:** a volunteer cancels → Change Stream → the agent proposes 2–3 ranked replacements with drafted messages.
 2. **Approve:** the coordinator ticks candidates, edits drafts if needed, and approves. Messages land in the volunteers' inboxes.
 3. **Respond:** the volunteer accepts (in a transaction, so a shift can't be overfilled) or declines. If everyone declines, the agent is triggered again and skips the people who declined.
-4. **Ask:** the coordinator types *"Need 2 more drivers for Saturday's pantry delivery"* and gets a drivers-only proposal.
+4. **Ask:** the coordinator types *"Need drivers for the Senior Grocery Delivery"* and gets a drivers-only proposal.
 5. **Coverage scan:** one click proposes invites for the top coverage gaps of the week.
 
 ## The coordinator stays in charge
@@ -170,12 +172,12 @@ If `reset_demo.py` can't create the vector search indexes automatically, it prin
 
 ## Demo script
 
-1. `python scripts/reset_demo.py`. In the **Volunteer** view as **Alex Rivera**, cancel **Saturday Delivery Run**.
+1. `python scripts/reset_demo.py`. In the **Volunteer** view as **Michael Brooks**, cancel **Saturday Delivery Run**.
 2. Switch to **Coordinator**. A 🚨 vacancy approval appears within seconds with no refresh. Open **🔍 Why?** to see the agent's steps.
 3. Edit one draft, then **Approve selected** for 2 candidates.
 4. **Volunteer** view as candidate #1. The request is in the inbox → **Accept** → toast.
 5. **Coordinator**: the shift board shows the delivery run as 🟢 filled, and the activity feed is updated.
-6. Ask the agent: *"Need 2 more drivers for Saturday's pantry delivery"*. A new proposal appears in the queue, with drivers only.
+6. Ask the agent: *"Need drivers for the Senior Grocery Delivery"*. A new proposal appears in the queue, with drivers only. (Ask about a shift with open spots: a full shift can't take more people, so the agent rightly declines.)
 7. **Volunteer** view as **Priya Natarajan** (bio mentions kids). **Kids Reading Hour** tops "Recommended".
 
 ## Built with

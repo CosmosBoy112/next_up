@@ -75,7 +75,7 @@ def current_identity(volunteers: list[dict]) -> tuple[str, dict | None]:
     by_name = {v["name"]: v for v in volunteers}
     name = st.session_state.get("as_volunteer")
     if name not in by_name:
-        name = "Alex Rivera" if "Alex Rivera" in by_name else volunteers[0]["name"]
+        name = "Michael Brooks" if "Michael Brooks" in by_name else volunteers[0]["name"]
     return view, by_name[name]
 
 

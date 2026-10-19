@@ -24,7 +24,7 @@ SKILLS = ["driving", "heavy lifting", "food handling", "spanish", "data entry",
           "event setup", "first aid", "kids activities", "social media", "photography"]
 
 NAMES = [
-    "Alex Rivera", "Priya Natarajan", "Marcus Johnson", "Sofia Delgado", "Wei Chen",
+    "Michael Brooks", "Priya Natarajan", "Marcus Johnson", "Sofia Delgado", "Wei Chen",
     "Fatima Al-Sayed", "Liam O'Connor", "Aisha Mensah", "Diego Morales", "Hannah Kim",
     "Tomasz Nowak", "Grace Okafor", "Ethan Brooks", "Mei Lin Tan", "Omar Haddad",
     "Isabella Rossi", "Jamal Carter", "Yuki Tanaka", "Nadia Petrova", "Carlos Mendez",
@@ -212,9 +212,9 @@ def build_seed(now: datetime | None = None) -> dict[str, list[dict]]:
         signups += [_signup_doc(vols[i], shift, "completed", now) for i in sorted(chosen)]
         shift["status"] = "filled"
 
-    # Planted demo: delivery run exactly full, including Alex Rivera.
+    # Planted demo: delivery run exactly full, including Michael Brooks.
     run = upcoming[0]
-    crew = [by_name["Alex Rivera"]] + [v for v in vols[1:N_SAT_DRIVERS] if is_available(v, run)][:2]
+    crew = [by_name["Michael Brooks"]] + [v for v in vols[1:N_SAT_DRIVERS] if is_available(v, run)][:2]
     assert len(crew) == run["required_count"], "seed: not enough Saturday drivers"
     signups += [_signup_doc(v, run, "confirmed", now) for v in crew]
     run["status"] = "filled"
