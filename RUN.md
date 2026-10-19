@@ -1,4 +1,4 @@
-# VolunteerOps 로컬 실행 가이드
+# NextUp 로컬 실행 가이드
 
 이 프로젝트에는 자동 테스트(pytest)가 없습니다. 앱을 띄워서 아래 데모 시나리오대로 직접 클릭해 보는 방식으로 테스트합니다.
 
@@ -63,12 +63,12 @@ python notifier.py
 
 | # | 화면 | 할 일 | 기대 결과 |
 |---|---|---|---|
-| 1 | Volunteer (**Alex Rivera**) | **Saturday Delivery Run** 취소 | — |
+| 1 | Volunteer (**Michael Brooks**) | **Saturday Delivery Run** 취소 | — |
 | 2 | Coordinator | 기다리기 | 몇 초 안에 🚨 대체 인원 제안이 뜸. **🔍 Why?**를 열면 에이전트가 판단한 순서가 보임 |
 | 3 | Coordinator | 초안 하나 수정 → 후보 2명 선택 → **Approve selected** | 승인 처리됨 |
 | 4 | Volunteer (1번 후보) | 받은 요청에서 **Accept** | 토스트 알림 |
 | 5 | Coordinator | 시프트 보드 확인 | Delivery Run이 🟢 filled, 활동 피드 갱신 |
-| 6 | Coordinator | 에이전트에게 *"Need 2 more drivers for Saturday's pantry delivery"* 입력 | 운전 가능한 사람만 제안됨 |
+| 6 | Coordinator | 에이전트에게 *"Need drivers for the Senior Grocery Delivery"* 입력 | 운전 가능한 사람만 제안됨 |
 | 7 | Volunteer (**Priya Natarajan**) | Recommended 확인 | **Kids Reading Hour**가 맨 위 |
 
 ## 문제 해결

@@ -1,0 +1,24 @@
+import React from "react";
+import { AbsoluteFill } from "remotion";
+import { Captions, FadeSlide, Logo, SceneShell, useEnter } from "../ui/overlay";
+
+// Scene 9: logo, credits, repo.
+export const Outro: React.FC = () => {
+  const p = useEnter(0);
+  return (
+    <SceneShell>
+      <AbsoluteFill style={{ alignItems: "center", justifyContent: "center", gap: 26, paddingBottom: 90 }}>
+        <div style={{ opacity: p, transform: `scale(${0.9 + 0.1 * p})` }}>
+          <Logo size={120} color="#fff" />
+        </div>
+        <FadeSlide delay={8} style={{ fontSize: 34, fontWeight: 700, color: "#fff", textShadow: "0 4px 20px rgba(31,37,71,.5)" }}>
+          Built with Luminal · MongoDB Atlas
+        </FadeSlide>
+        <FadeSlide delay={14} style={{ fontSize: 30, fontWeight: 700, color: "#fff", padding: "8px 22px", borderRadius: 999, background: "rgba(91,95,240,.85)" }}>
+          github.com/CosmosBoy112/next_up
+        </FadeSlide>
+      </AbsoluteFill>
+      <Captions cues={[[0, "NextUp. The agent does the work. The coordinator stays in charge."]]} />
+    </SceneShell>
+  );
+};

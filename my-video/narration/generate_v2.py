@@ -1,0 +1,104 @@
+"""Generate the NextUpDemoVoice2 voice-over: a smoother rewrite of narration/generate.py.
+
+Differences from v1: every clip is a whole sentence (no lines split mid-sentence, so the
+intonation doesn't restart), a calmer speed (1.03 instead of 1.08), connective phrasing between
+scenes, and cues placed on the on-screen action. A scene is lengthened automatically when its
+narration needs more room; the visuals just hold their last frame.
+
+Writes clips to public/narration2/ and cue times to src/voice2/narration.ts.
+Setup is the same as generate.py. Run:
+  <venv>/bin/python narration/generate_v2.py --models <dir with kokoro-v1.0.onnx and voices-v1.0.bin>
+"""
+import argparse, json, math, pathlib
+import numpy as np
+import soundfile as sf
+from kokoro_onnx import EspeakConfig, Kokoro
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+VOICE, SPEED, GAP, TAIL = "af_heart", 1.03, 0.35, 0.45
+
+# scene id, minimum length in seconds, [(target start within scene, spoken text, caption if different)]
+SCENES = [
+    ("intro", 3.0, [(0.7, "Meet NextUp. Your volunteers, covered.")]),
+    ("michael", 10.0, [
+        (0.3, "This is Michael. He drives the Saturday delivery run for Valley Community Pantry."),
+        (5.0, "Cancelling used to mean a guilty group text, and hoping someone would see it."),
+    ]),
+    ("alice", 9.6, [
+        (0.3, "And this is Alice, who coordinates the volunteers."),
+        (2.9, "Every cancellation meant spreadsheets, a dozen texts, and leaning on the same few people until they burned out."),
+    ]),
+    ("title", 3.4, [(0.35, "With NextUp, the agent proposes, and the coordinator decides.")]),
+    ("scenario1", 28.0, [
+        (0.4, "Say Michael can't make it on Saturday. He cancels in one click."),
+        (5.4, "Within seconds, the agent finds people who are free for the whole shift, can drive, and haven't been overworked."),
+        (11.4, "It even drafts a personal message for each one."),
+        (14.1, "Every step it takes is logged, so Alice can see exactly why it chose them."),
+        (19.0, "But nothing goes out until Alice approves. She reviews the drafts, and sends two requests."),
+        (25.0, "Jordan accepts, and the shift is covered."),
+    ]),
+    ("scenario2", 10.0, [
+        (0.3, "Alice can also just ask, in plain English."),
+        (4.4, "The agent finds the right shift, and proposes only volunteers who can drive."),
+    ]),
+    ("scenario3", 12.0, [
+        (0.3, "It watches the weather, too. When a storm is forecast for Saturday, the agent suggests alternatives."),
+        (6.6, "Alice picks one, and the whole crew is notified."),
+    ]),
+    ("results", 15.0, [
+        (0.5, "We tested it on real scenarios with the real model, and ninety-three percent of runs passed.",
+         "We tested it on real scenarios with the real model, and 93% of runs passed."),
+        (5.6, "Just as important, we check every action the agent takes."),
+        (9.0, "It only proposes real volunteers, its rules are enforced in code, every step is logged, and nothing is sent without approval."),
+    ]),
+    ("outro", 4.5, [(0.3, "NextUp. The agent does the work, and the coordinator stays in charge.")]),
+]
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--models", required=True)
+    ap.add_argument("--espeak", default="/opt/homebrew/opt/espeak-ng")
+    args = ap.parse_args()
+    m = pathlib.Path(args.models)
+    kokoro = Kokoro(
+        str(m / "kokoro-v1.0.onnx"),
+        str(m / "voices-v1.0.bin"),
+        espeak_config=EspeakConfig(
+            lib_path=f"{args.espeak}/lib/libespeak-ng.dylib", data_path=f"{args.espeak}/share/espeak-ng-data"
+        ),
+    )
+    out_dir = ROOT / "public" / "narration2"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    scenes, n = [], 0
+    for scene_id, min_length, lines in SCENES:
+        cues, prev_end = [], 0.0
+        for target, spoken, *caption in lines:
+            samples, sr = kokoro.create(spoken, voice=VOICE, speed=SPEED, lang="en-us")
+            loud = np.where(np.abs(samples) > 0.01)[0]
+            samples = samples[max(loud[0] - int(0.03 * sr), 0) : loud[-1] + int(0.12 * sr)]
+            dur = len(samples) / sr
+            at = round(max(target, prev_end + GAP), 2)
+            prev_end = at + dur
+            file = f"narration2/line{n:02d}.wav"
+            sf.write(ROOT / "public" / file, samples, sr)
+            cues.append({"at": at, "dur": round(dur, 2), "file": file, "text": caption[0] if caption else spoken})
+            print(f"{scene_id:10s} {at:5.2f}-{prev_end:5.2f}  {spoken[:70]}")
+            n += 1
+        length = max(min_length, math.ceil((prev_end + TAIL) * 10) / 10)
+        if length > min_length:
+            print(f"  -> {scene_id} lengthened {min_length}s -> {length}s")
+        scenes.append({"id": scene_id, "seconds": length, "cues": cues})
+    total = sum(sc["seconds"] for sc in scenes)
+    print(f"total {total:.1f}s")
+    ts = (
+        "// Generated by narration/generate_v2.py (Kokoro-82M, voice af_heart). Re-run it instead of editing.\n"
+        'import type { NarratedScene } from "../voice/narration";\n\n'
+        f"export const NARRATION: NarratedScene[] = {json.dumps(scenes, indent=2)};\n"
+    )
+    (ROOT / "src" / "voice2").mkdir(exist_ok=True)
+    (ROOT / "src" / "voice2" / "narration.ts").write_text(ts)
+
+
+if __name__ == "__main__":
+    main()
